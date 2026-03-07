@@ -2,6 +2,8 @@
 
 A configurable proxy for [Model Context Protocol (MCP)](https://modelcontextprotocol.io) servers. Sits between an MCP client (e.g. Claude Desktop) and one or more upstream MCP servers, applying a plugin pipeline for logging, filtering, and rewriting requests and responses.
 
+**Intended workflow:** Point the proxy at an MCP server, then use the built-in Claude Code skills (`/probe-mcp` and `/propose-filters`) to have Claude analyze the server's security surface and generate appropriate mitigations — from simple YAML config to custom content-aware plugins. The proxy and plugins provide the runtime machinery; Claude does the heavy lifting of analysis and code generation.
+
 ## Features
 
 - **Multi-upstream aggregation** — proxy multiple MCP servers into a single endpoint with namespaced tools
@@ -12,6 +14,7 @@ A configurable proxy for [Model Context Protocol (MCP)](https://modelcontextprot
 - **Inventory plugin** — JSON snapshot of all available tools, resources, and prompts for offline analysis
 - **Stdio and HTTP transports** — upstream and proxy transports are independently configurable
 - **Environment variable expansion** — `${VAR}` references in config values
+- **Claude Code skills** — `/probe-mcp` and `/propose-filters` for AI-assisted security analysis
 
 ## Installation
 
@@ -202,6 +205,28 @@ Writes a pretty-printed JSON file with the latest known inventory of tools, reso
 ```
 
 Sections appear incrementally — `tools` is present after the first `tools/list`, `resources` after the first `resources/list`, etc.
+
+## Claude Code Skills
+
+This project includes two skills for [Claude Code](https://claude.com/claude-code) that automate MCP security analysis. The intended workflow is:
+
+1. **Set up the proxy** — create a config pointing at your upstream MCP server(s) with logging and inventory plugins enabled.
+2. **Run `/probe-mcp`** — Claude interactively probes the server: discovers tools, tests them with safe inputs, and (with your approval) tests for SSRF, path traversal, and other security issues. Produces a structured report.
+3. **Run `/propose-filters`** — Claude analyzes the probe results and audit logs, then proposes mitigations. These range from simple YAML filter/rewrite config to custom Python plugins that inspect request arguments or response content (e.g. URL domain allowlists, PII redaction, metadata gates). Claude writes the plugin code, config models, server wiring, and tests.
+
+### `/probe-mcp`
+
+Systematically probes the MCP proxy to map its capabilities and security surface. Asks for explicit approval before running any potentially dangerous tests (SSRF vectors, file:// scheme, cloud metadata endpoints, etc.). Outputs a structured report with findings and recommendations.
+
+### `/propose-filters`
+
+Analyzes inventory, audit logs, and probe results to propose security mitigations at three levels:
+
+- **Level 1 — YAML filter config**: block or allow tools/resources/prompts by glob pattern
+- **Level 2 — YAML rewrite config**: lock down specific arguments to safe values
+- **Level 3 — Custom plugins**: content-aware Python plugins that inspect request arguments or response bodies (e.g. restrict a `fetch` tool to approved domains, redact PII from responses, gate Notion reads by workspace ID)
+
+Reviews each proposal with you before implementing. For custom plugins, follows the full project convention: config model, plugin class, server wiring, and tests.
 
 ## Examples
 

@@ -1,5 +1,15 @@
 # CLAUDE.md
 
+## Overview
+
+This is an MCP security proxy with built-in Claude Code skills. The intended workflow is:
+
+1. Point the proxy at an upstream MCP server with logging + inventory plugins enabled.
+2. Run `/probe-mcp` — Claude probes the server interactively, testing tools and identifying security issues.
+3. Run `/propose-filters` — Claude analyzes logs and proposes mitigations, from YAML config to custom content-aware plugins. Claude writes the plugin code, config, and tests.
+
+The proxy and plugin system provide the runtime; Claude handles analysis and code generation.
+
 ## Commands
 
 ```bash
@@ -26,6 +36,9 @@ src/mcp_proxy/
   cli.py                # Click CLI entry point
 examples/               # basic_proxy.yaml, multi_upstream.yaml, security_filter.yaml
 tests/                  # test_config.py, test_plugins.py
+.claude/skills/
+  probe-mcp.md          # /probe-mcp — interactive security probing
+  propose-filters.md    # /propose-filters — analyze logs, propose & build mitigations
 ```
 
 ## Architecture
@@ -115,6 +128,22 @@ Calls are logged as a single paired entry after the response is received.
 ts, method, tool_name, resource_uri, prompt_name,
 arguments, is_error, content_blocks, content_length_chars, duration_ms, items, item_count
 ```
+
+## Skills
+
+### `/probe-mcp`
+
+Probes an MCP server through the proxy. Discovers tools/resources/prompts, tests them with safe inputs, then (with user approval) tests for SSRF, path traversal, scheme abuse, etc. Outputs a structured probe report to `logs/probe_report.md`.
+
+### `/propose-filters`
+
+Analyzes probe reports and audit logs to propose mitigations at three levels:
+
+- **Level 1**: YAML `filter` config (allow/block by glob pattern)
+- **Level 2**: YAML `rewrite` config (lock down arguments)
+- **Level 3**: Custom `PluginBase` subclass (content-aware inspection of arguments or responses — e.g. URL domain allowlists, PII redaction, metadata gates)
+
+For Level 3, Claude writes the full plugin: config model in `schema.py`, plugin class, server wiring, and tests.
 
 ## Key Constraints
 
