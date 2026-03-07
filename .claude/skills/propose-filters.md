@@ -41,7 +41,31 @@ From the audit log, look for:
 - Responses containing credentials, tokens, internal hostnames, or PII
 - Error patterns suggesting the tool attempted something it shouldn't
 
-### 3. Ask the User About Context
+### 3. Identify Log Gaps
+
+The logs may come from `/probe-mcp` or from normal human usage. Either way, they are unlikely to cover every tool, argument pattern, or edge case. Before proposing mitigations, identify what's *missing* from the logs.
+
+Compare the inventory against the audit log and flag:
+
+- **Untested tools**: Tools that appear in `inventory.json` but have zero calls in `audit.jsonl`. These are blind spots — you can't assess their risk from logs alone.
+- **Untested parameters**: Tools that were called, but only with a subset of their accepted parameters. For example, a `fetch` tool may have been called with `url` but never with `raw: true` or `max_length` near its limit.
+- **Untested argument ranges**: Tools that were called, but only with "safe" arguments. For example, `fetch` was called with `http://example.com` but never with internal IPs, `file://` URLs, or very long URLs.
+- **Missing error cases**: Tools that always succeeded — no log entries showing error responses or rejected inputs. This means you don't know how the tool behaves when given bad input.
+- **Unexercised resources/prompts**: Resources or prompts listed in the inventory but never read or used.
+- **Missing response diversity**: Tools that were called multiple times but always returned similar content. You may not know what the tool returns for different input classes.
+
+Present these gaps to the user using AskUserQuestion. For each gap, explain:
+
+- What is unknown due to the gap
+- What risk could be hiding there
+- Whether the user should run `/probe-mcp` to fill the gap, or whether you can propose a conservative mitigation anyway (e.g. default-deny for untested tools)
+
+If the logs are sparse (e.g. only a few human-generated calls), recommend that the user either:
+
+1. Run `/probe-mcp` to systematically fill the gaps, or
+2. Accept that mitigations will be conservative (default-deny with explicit allow-list) since there isn't enough data to be more targeted
+
+### 4. Ask the User About Context
 
 Use AskUserQuestion to understand:
 
@@ -50,7 +74,7 @@ Use AskUserQuestion to understand:
 - What data sensitivity level? (public, internal, confidential)
 - Should mitigations be strict (default-deny) or targeted (block known-bad)?
 
-### 4. Propose Mitigations
+### 5. Propose Mitigations
 
 For each identified risk, propose the appropriate level of mitigation. Present these to the user grouped by category.
 
@@ -105,7 +129,7 @@ When writing a custom plugin:
 6. Add a branch in `server.py:_build_plugin()` to instantiate it.
 7. Add tests in `tests/test_plugins.py`.
 
-### 5. Review and Implement
+### 6. Review and Implement
 
 Use AskUserQuestion to present the full proposal:
 
