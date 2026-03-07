@@ -37,6 +37,7 @@ from .plugins.rewrite_plugin import RewritePlugin
 
 def _build_oauth(cfg: OAuthConfig, upstream_name: str) -> OAuth:
     storage_dir = (Path(".oauth2") / upstream_name).resolve()
+    storage_dir.mkdir(parents=True, exist_ok=True)
     store = FileTreeStore(
         data_directory=storage_dir,
         key_sanitization_strategy=FileTreeV1KeySanitizationStrategy(storage_dir),
