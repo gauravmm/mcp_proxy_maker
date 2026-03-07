@@ -42,6 +42,9 @@ class LoggingPluginConfig(BaseModel):
     include_payloads: bool = True
     # If set, only log these MCP methods (e.g. ["tools/call", "resources/read"])
     methods: list[str] | None = None
+    # Size-based log rotation. None = no rotation (grow forever).
+    max_bytes: int | None = None
+    max_backups: int = 5
 
 
 class FilterPluginConfig(BaseModel):

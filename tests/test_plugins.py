@@ -293,6 +293,63 @@ async def test_logging_list_tools(tmp_path):
     assert entry["items"] == ["foo", "bar"]
 
 
+@pytest.mark.asyncio
+async def test_logging_rotation(tmp_path):
+    log_file = tmp_path / "test.jsonl"
+    plugin = JsonlLoggingPlugin(
+        LoggingPluginConfig(
+            type="logging",
+            log_file=str(log_file),
+            max_bytes=200,
+            max_backups=3,
+        )
+    )
+
+    # Write enough entries to trigger rotation
+    for i in range(20):
+        params = make_call_params(f"tool_{i}", {"i": i})
+        params = await plugin.on_call_tool_request(params)
+        result = make_tool_result(f"result_{i}")
+        await plugin.on_call_tool_response(params, result)
+
+    # Current file should exist and be under the limit
+    assert log_file.exists()
+    assert log_file.stat().st_size < 400  # should have rotated well before this
+
+    # At least one backup should exist
+    backup1 = log_file.with_suffix(".jsonl.1")
+    assert backup1.exists()
+
+    # Should not exceed max_backups
+    excess = log_file.with_suffix(".jsonl.4")
+    assert not excess.exists()
+
+    # All backup files should contain valid JSONL
+    for i in range(1, 4):
+        backup = log_file.with_suffix(f".jsonl.{i}")
+        if backup.exists():
+            for line in backup.read_text().strip().splitlines():
+                entry = json.loads(line)
+                assert entry["schema_version"] == 2
+
+
+@pytest.mark.asyncio
+async def test_logging_no_rotation_by_default(tmp_path):
+    log_file = tmp_path / "test.jsonl"
+    plugin = JsonlLoggingPlugin(LoggingPluginConfig(type="logging", log_file=str(log_file)))
+
+    for i in range(10):
+        params = make_call_params(f"tool_{i}")
+        params = await plugin.on_call_tool_request(params)
+        result = make_tool_result(f"result_{i}")
+        await plugin.on_call_tool_response(params, result)
+
+    # All entries in one file, no backups
+    lines = log_file.read_text().strip().splitlines()
+    assert len(lines) == 10
+    assert not log_file.with_suffix(".jsonl.1").exists()
+
+
 # ---------------------------------------------------------------------------
 # InventoryPlugin
 # ---------------------------------------------------------------------------

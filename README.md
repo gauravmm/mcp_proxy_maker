@@ -2,19 +2,11 @@
 
 A configurable proxy for [Model Context Protocol (MCP)](https://modelcontextprotocol.io) servers. Sits between an MCP client (e.g. Claude Desktop) and one or more upstream MCP servers, applying a plugin pipeline for logging, filtering, and rewriting requests and responses.
 
+As an MCP proxy, it has all the features you'd expect. The real strength of this comes when you use it with the Claude Code skills to generate better filters.
+
 **Intended workflow:** Point the proxy at an MCP server, then use the built-in Claude Code skills (`/probe-mcp` and `/propose-filters`) to have Claude analyze the server's security surface and generate appropriate mitigations — from simple YAML config to custom content-aware plugins. The proxy and plugins provide the runtime machinery; Claude does the heavy lifting of analysis and code generation.
 
-## Features
-
-- **Multi-upstream aggregation** — proxy multiple MCP servers into a single endpoint with namespaced tools
-- **Plugin pipeline** — stack logging, filtering, and rewriting plugins per upstream or globally
-- **Filter plugin** — allow-list or deny-list tools, resources, and prompts by glob pattern
-- **Rewrite plugin** — rename tools, inject fixed arguments, prefix response text
-- **Logging plugin** — structured JSONL audit log of all operations with timing
-- **Inventory plugin** — JSON snapshot of all available tools, resources, and prompts for offline analysis
-- **Stdio and HTTP transports** — upstream and proxy transports are independently configurable
-- **Environment variable expansion** — `${VAR}` references in config values
-- **Claude Code skills** — `/probe-mcp` and `/propose-filters` for AI-assisted security analysis
+If your server is sensitive or has production data (testing in production? _really?_), you could just use the MCP proxy to generate logs. Once you have enough logs, run `/propose-filters` and Claude will do just that. If there are gaps in your logs, Claude will try to identify them so you can generate more logs and close the gap.Ca
 
 ## Installation
 
@@ -120,6 +112,8 @@ Appends one JSON line per operation to a file.
 | `log_file` | required | Path to the JSONL output file. Parent dirs are created automatically. |
 | `include_payloads` | `true` | Include request arguments and response text in log entries. |
 | `methods` | all | Limit logging to specific MCP methods, e.g. `["tools/call"]`. |
+| `max_bytes` | none | Rotate the log file when it exceeds this size in bytes. No rotation if unset. |
+| `max_backups` | `5` | Number of rotated backup files to keep (`.1`, `.2`, ...). |
 
 **Log entry fields:**
 
@@ -227,6 +221,19 @@ Analyzes inventory, audit logs, and probe results to propose security mitigation
 - **Level 3 — Custom plugins**: content-aware Python plugins that inspect request arguments or response bodies (e.g. restrict a `fetch` tool to approved domains, redact PII from responses, gate Notion reads by workspace ID)
 
 Reviews each proposal with you before implementing. For custom plugins, follows the full project convention: config model, plugin class, server wiring, and tests.
+
+## Proxy Features
+
+The underlying proxy is based on FastMCP, and has all the expected features:
+
+- **Multi-upstream aggregation** — proxy multiple MCP servers into a single endpoint with namespaced tools
+- **Plugin pipeline** — stack logging, filtering, and rewriting plugins per upstream or globally
+- **Filter plugin** — allow-list or deny-list tools, resources, and prompts by glob pattern
+- **Rewrite plugin** — rename tools, inject fixed arguments, prefix response text
+- **Logging plugin** — structured JSONL audit log of all operations with timing
+- **Inventory plugin** — JSON snapshot of all available tools, resources, and prompts for offline analysis
+- **Stdio and HTTP transports** — upstream and proxy transports are independently configurable
+- **Environment variable expansion** — `${VAR}` references in config values
 
 ## Examples
 

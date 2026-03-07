@@ -105,6 +105,8 @@ upstreams:
         log_file: str
         include_payloads: bool   # default: true
         methods: [str] | null    # default: all
+        max_bytes: int | null    # default: null (no rotation)
+        max_backups: int         # default: 5
       - type: filter
         allow_tools: [str] | null    # glob patterns; mutually exclusive with block_tools
         block_tools: [str] | null
@@ -152,4 +154,5 @@ For Level 3, Claude writes the full plugin: config model in `schema.py`, plugin 
 - `argument_overrides` keys are **upstream** names (pre-rename)
 - If `filter` is stacked after `rewrite`, filter config uses **exposed** (post-rename) names
 - Namespace separator is `_` (e.g. namespace `fs` + tool `read_file` → `fs_read_file`)
-- Log files are opened in append mode at startup; no rotation in v1
+- Log files are opened in append mode at startup
+- Log rotation is opt-in via `max_bytes`; backups use numeric suffixes (`.1`, `.2`, ...)

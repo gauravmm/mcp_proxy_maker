@@ -36,23 +36,43 @@ class JsonlLoggingPlugin(PluginBase):
     Each line is a self-contained JSON object.  See the schema in the project
     README for field descriptions.
 
-    The log file is opened at construction time (append mode).  Log rotation
-    is not handled in v1 — use an external tool (logrotate, etc.) if needed.
+    The log file is opened at construction time (append mode).  Optional
+    size-based rotation: when ``max_bytes`` is set, the file is rotated when
+    it exceeds that size.  Old files are renamed with numeric suffixes
+    (``.1``, ``.2``, ...) up to ``max_backups``.
     """
 
     def __init__(self, config: LoggingPluginConfig) -> None:
         self._include_payloads = config.include_payloads
         self._methods: set[str] | None = set(config.methods) if config.methods else None
-        path = Path(config.log_file)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        self._file = open(path, "a", encoding="utf-8")  # noqa: SIM115
+        self._path = Path(config.log_file)
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._max_bytes = config.max_bytes
+        self._max_backups = config.max_backups
+        self._file = open(self._path, "a", encoding="utf-8")  # noqa: SIM115
 
     def _should_log(self, method: str) -> bool:
         return self._methods is None or method in self._methods
 
+    def _rotate(self) -> None:
+        """Rotate log files: current -> .1, .1 -> .2, ..., delete oldest."""
+        self._file.close()
+        for i in range(self._max_backups, 0, -1):
+            src = self._path.with_suffix(f"{self._path.suffix}.{i}")
+            if i == self._max_backups:
+                src.unlink(missing_ok=True)
+            else:
+                dst = self._path.with_suffix(f"{self._path.suffix}.{i + 1}")
+                if src.exists():
+                    src.rename(dst)
+        self._path.rename(self._path.with_suffix(f"{self._path.suffix}.1"))
+        self._file = open(self._path, "a", encoding="utf-8")  # noqa: SIM115
+
     def _write(self, entry: dict[str, Any]) -> None:
         self._file.write(json.dumps(entry, default=str) + "\n")
         self._file.flush()
+        if self._max_bytes is not None and self._path.stat().st_size >= self._max_bytes:
+            self._rotate()
 
     def _base(self, method: str) -> dict[str, Any]:
         return {
