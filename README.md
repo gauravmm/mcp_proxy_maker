@@ -6,45 +6,20 @@ As an MCP proxy, it has all the features you'd expect. The real strength of this
 
 **Intended workflow:** Point the proxy at an MCP server, then use the built-in Claude Code skills (`/probe-mcp` and `/propose-filters`) to have Claude analyze the server's security surface and generate appropriate mitigations — from simple YAML config to custom content-aware plugins. The proxy and plugins provide the runtime machinery; Claude does the heavy lifting of analysis and code generation.
 
-If your server is sensitive or has production data (testing in production? _really?_), you could just use the MCP proxy to generate logs. Once you have enough logs, run `/propose-filters` and Claude will do just that. If there are gaps in your logs, Claude will try to identify them so you can generate more logs and close the gap.Ca
+If your server is sensitive or has production data (testing in production? _really?_), you could just use the MCP proxy to generate logs. Once you have enough logs, run `/propose-filters` and Claude will do just that. If there are gaps in your logs, Claude will try to identify them so you can generate more logs and close the gap.
 
-## Installation
+## Quick Start
 
-Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
+Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/). You'll be making plenty of changes to the codebase, so clone it for yourself.
 
 ```bash
 git clone <repo>
 cd mcp-security-proxy-maker
-uv sync
-```
 
-## Quick Start
-
-Create a config file (see [examples/](examples/)) and run:
-
-```bash
 uv run mcp-proxy --config examples/basic_proxy.yaml
 ```
 
-### Claude Desktop integration
-
-Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or the equivalent on your platform:
-
-```json
-{
-  "mcpServers": {
-    "proxy": {
-      "command": "uv",
-      "args": [
-        "run",
-        "--project", "/path/to/mcp-security-proxy-maker",
-        "mcp-proxy",
-        "--config", "/path/to/proxy.yaml"
-      ]
-    }
-  }
-}
-```
+Then reopen Claude Code to this repository so it picks up the `.mcp.json` file and connects to the server. Each time you restart the server, re-run `/mcp` and reconnect to the MCP server.
 
 ## Configuration
 
@@ -269,3 +244,8 @@ Options:
   --port INTEGER                       Override the port for HTTP transport.
   --help                               Show this message and exit.
 ```
+
+## TODOs
+
+- [ ] Some way for Claude to interactively filter and simplify logs.
+- [ ] A fully worked example.
