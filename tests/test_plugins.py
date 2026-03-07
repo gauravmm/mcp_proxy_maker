@@ -210,6 +210,21 @@ async def test_rewrite_no_rename_passthrough():
 # ---------------------------------------------------------------------------
 
 
+def make_image_result() -> ToolResult:
+    return ToolResult(
+        content=[mt.ImageContent(type="image", data="abc123==", mimeType="image/png")]
+    )
+
+
+def make_mixed_result(text: str) -> ToolResult:
+    return ToolResult(
+        content=[
+            mt.TextContent(type="text", text=text),
+            mt.ImageContent(type="image", data="abc123==", mimeType="image/png"),
+        ]
+    )
+
+
 @pytest.mark.asyncio
 async def test_logging_writes_paired_entry(tmp_path):
     log_file = tmp_path / "test.jsonl"
@@ -422,3 +437,151 @@ async def test_inventory_accumulates_across_hooks(tmp_path):
     assert len(snapshot["tools"]) == 1
     assert len(snapshot["resources"]) == 1
     assert len(snapshot["prompts"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# JsonlLoggingPlugin — payload offload and binary handling
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_logging_offloads_large_payload(tmp_path):
+    log_file = tmp_path / "test.jsonl"
+    plugin = JsonlLoggingPlugin(
+        LoggingPluginConfig(type="logging", log_file=str(log_file), payload_offload_chars=10)
+    )
+    params = make_call_params("my_tool")
+    params = await plugin.on_call_tool_request(params)
+    result = make_tool_result("this is a long response that exceeds ten chars")
+    await plugin.on_call_tool_response(params, result)
+
+    entry = json.loads(log_file.read_text().strip())
+    assert "response_payload" not in entry
+    assert "payload_file" in entry
+
+    sidecar = tmp_path / entry["payload_file"]
+    assert sidecar.exists()
+    assert "long response" in sidecar.read_text()
+
+
+@pytest.mark.asyncio
+async def test_logging_inline_payload_below_threshold(tmp_path):
+    log_file = tmp_path / "test.jsonl"
+    plugin = JsonlLoggingPlugin(
+        LoggingPluginConfig(type="logging", log_file=str(log_file), payload_offload_chars=1000)
+    )
+    params = make_call_params("my_tool")
+    params = await plugin.on_call_tool_request(params)
+    result = make_tool_result("short")
+    await plugin.on_call_tool_response(params, result)
+
+    entry = json.loads(log_file.read_text().strip())
+    assert entry["response_payload"] == "short"
+    assert "payload_file" not in entry
+
+
+@pytest.mark.asyncio
+async def test_logging_binary_omitted_by_default(tmp_path):
+    log_file = tmp_path / "test.jsonl"
+    plugin = JsonlLoggingPlugin(LoggingPluginConfig(type="logging", log_file=str(log_file)))
+    params = make_call_params("my_tool")
+    params = await plugin.on_call_tool_request(params)
+    await plugin.on_call_tool_response(params, make_image_result())
+
+    entry = json.loads(log_file.read_text().strip())
+    assert entry["binary_content"] is True
+    assert "response_payload" not in entry
+    assert "binary_payload_file" not in entry
+    payloads_dir = tmp_path / "test_payloads"
+    assert not payloads_dir.exists()
+
+
+@pytest.mark.asyncio
+async def test_logging_binary_saved_when_enabled(tmp_path):
+    log_file = tmp_path / "test.jsonl"
+    plugin = JsonlLoggingPlugin(
+        LoggingPluginConfig(type="logging", log_file=str(log_file), include_binary_payloads=True)
+    )
+    params = make_call_params("my_tool")
+    params = await plugin.on_call_tool_request(params)
+    await plugin.on_call_tool_response(params, make_image_result())
+
+    entry = json.loads(log_file.read_text().strip())
+    assert entry["binary_content"] is True
+    assert "binary_payload_file" in entry
+
+    sidecar = tmp_path / entry["binary_payload_file"]
+    assert sidecar.exists()
+    data = json.loads(sidecar.read_text())
+    assert data[0]["type"] == "image"
+    assert data[0]["mimeType"] == "image/png"
+
+
+@pytest.mark.asyncio
+async def test_logging_mixed_response(tmp_path):
+    log_file = tmp_path / "test.jsonl"
+    plugin = JsonlLoggingPlugin(
+        LoggingPluginConfig(
+            type="logging",
+            log_file=str(log_file),
+            payload_offload_chars=5,
+            include_binary_payloads=True,
+        )
+    )
+    params = make_call_params("my_tool")
+    params = await plugin.on_call_tool_request(params)
+    await plugin.on_call_tool_response(params, make_mixed_result("hello world"))
+
+    entry = json.loads(log_file.read_text().strip())
+    assert entry["binary_content"] is True
+    assert "payload_file" in entry  # text offloaded (>5 chars)
+    assert "binary_payload_file" in entry  # binary saved
+
+
+@pytest.mark.asyncio
+async def test_logging_rotation_deletes_payloads_dir(tmp_path):
+    log_file = tmp_path / "test.jsonl"
+    plugin = JsonlLoggingPlugin(
+        LoggingPluginConfig(
+            type="logging",
+            log_file=str(log_file),
+            max_bytes=50,
+            max_backups=1,
+            payload_offload_chars=1,
+        )
+    )
+    # First entry: causes a payload sidecar to be written, then rotation
+    params = make_call_params("my_tool")
+    params = await plugin.on_call_tool_request(params)
+    await plugin.on_call_tool_response(params, make_tool_result("hello"))
+    # Force a second rotation to push the first backup (and its payloads) out
+    params2 = make_call_params("my_tool")
+    params2 = await plugin.on_call_tool_request(params2)
+    await plugin.on_call_tool_response(params2, make_tool_result("world"))
+
+    # After two rotations with max_backups=1, the first payloads dir must be gone
+    assert not (tmp_path / "test_payloads.2").exists()
+
+
+@pytest.mark.asyncio
+async def test_logging_rotation_renames_payloads_dir(tmp_path):
+    log_file = tmp_path / "test.jsonl"
+    plugin = JsonlLoggingPlugin(
+        LoggingPluginConfig(
+            type="logging",
+            log_file=str(log_file),
+            max_bytes=50,
+            max_backups=2,
+            payload_offload_chars=1,
+        )
+    )
+    params = make_call_params("my_tool")
+    params = await plugin.on_call_tool_request(params)
+    await plugin.on_call_tool_response(params, make_tool_result("hello"))
+
+    payloads_dir = tmp_path / "test_payloads"
+    backup1 = tmp_path / "test_payloads.1"
+
+    # After rotation, current payloads dir should be renamed to .1
+    assert not payloads_dir.exists()
+    assert backup1.exists()

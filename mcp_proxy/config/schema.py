@@ -45,6 +45,13 @@ class LoggingPluginConfig(BaseModel):
     # Size-based log rotation. None = no rotation (grow forever).
     max_bytes: int | None = None
     max_backups: int = 5
+    # Offload response payloads larger than this many characters to a sidecar
+    # file in {log_stem}_payloads/ next to the log. Sidecar dirs are rotated
+    # and deleted along with their corresponding log backup.
+    payload_offload_chars: int | None = None
+    # Save binary content blocks (images, audio) to sidecar files. When False
+    # (default), binary responses are noted in the log but not persisted.
+    include_binary_payloads: bool = False
 
 
 class FilterPluginConfig(BaseModel):
