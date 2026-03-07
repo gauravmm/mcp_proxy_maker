@@ -19,6 +19,8 @@ global_plugins:
   - type: logging
     log_file: logs/all.jsonl
     include_payloads: true
+  - type: inventory
+    inventory_file: logs/inventory.json
 
 upstreams:
   - name: filesystem

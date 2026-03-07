@@ -14,6 +14,8 @@ global_plugins:
   - type: logging
     log_file: logs/audit.jsonl
     include_payloads: true
+  - type: inventory
+    inventory_file: logs/inventory.json
 
 upstreams:
   - name: tools

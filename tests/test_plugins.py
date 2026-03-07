@@ -14,11 +14,13 @@ from pydantic import AnyUrl
 
 from mcp_proxy.config.schema import (
     FilterPluginConfig,
+    InventoryPluginConfig,
     LoggingPluginConfig,
     RewritePluginConfig,
 )
 from mcp_proxy.plugins.base import PluginBase
 from mcp_proxy.plugins.filter_plugin import FilterPlugin
+from mcp_proxy.plugins.inventory_plugin import InventoryPlugin
 from mcp_proxy.plugins.logging_plugin import JsonlLoggingPlugin
 from mcp_proxy.plugins.rewrite_plugin import RewritePlugin
 
@@ -288,3 +290,77 @@ async def test_logging_list_tools(tmp_path):
     assert entry["event"] == "list"
     assert entry["item_count"] == 2
     assert entry["items"] == ["foo", "bar"]
+
+
+# ---------------------------------------------------------------------------
+# InventoryPlugin
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_inventory_writes_tools_snapshot(tmp_path):
+    inv_file = tmp_path / "inventory.json"
+    plugin = InventoryPlugin(InventoryPluginConfig(type="inventory", inventory_file=str(inv_file)))
+
+    tools = [make_tool("foo"), make_tool("bar")]
+    result = await plugin.on_list_tools(tools)
+    assert result is tools
+
+    snapshot = json.loads(inv_file.read_text())
+    assert "ts" in snapshot
+    assert len(snapshot["tools"]) == 2
+    assert snapshot["tools"][0]["name"] == "foo"
+    assert snapshot["tools"][0]["description"] == "test"
+    assert snapshot["tools"][0]["parameters"] == {"type": "object", "properties": {}}
+    assert "resources" not in snapshot
+    assert "prompts" not in snapshot
+
+
+@pytest.mark.asyncio
+async def test_inventory_writes_resources_snapshot(tmp_path):
+    inv_file = tmp_path / "inventory.json"
+    plugin = InventoryPlugin(InventoryPluginConfig(type="inventory", inventory_file=str(inv_file)))
+
+    resources = [make_resource("file:///a"), make_resource("file:///b")]
+    result = await plugin.on_list_resources(resources)
+    assert result is resources
+
+    snapshot = json.loads(inv_file.read_text())
+    assert len(snapshot["resources"]) == 2
+    assert snapshot["resources"][0]["uri"] == "file:///a"
+
+
+@pytest.mark.asyncio
+async def test_inventory_writes_prompts_snapshot(tmp_path):
+    inv_file = tmp_path / "inventory.json"
+    plugin = InventoryPlugin(InventoryPluginConfig(type="inventory", inventory_file=str(inv_file)))
+
+    prompts = [make_prompt("greeting"), make_prompt("farewell")]
+    result = await plugin.on_list_prompts(prompts)
+    assert result is prompts
+
+    snapshot = json.loads(inv_file.read_text())
+    assert len(snapshot["prompts"]) == 2
+    assert snapshot["prompts"][0]["name"] == "greeting"
+
+
+@pytest.mark.asyncio
+async def test_inventory_accumulates_across_hooks(tmp_path):
+    inv_file = tmp_path / "inventory.json"
+    plugin = InventoryPlugin(InventoryPluginConfig(type="inventory", inventory_file=str(inv_file)))
+
+    await plugin.on_list_tools([make_tool("t1")])
+    snapshot = json.loads(inv_file.read_text())
+    assert "tools" in snapshot
+    assert "resources" not in snapshot
+
+    await plugin.on_list_resources([make_resource("file:///r1")])
+    snapshot = json.loads(inv_file.read_text())
+    assert "tools" in snapshot
+    assert "resources" in snapshot
+
+    await plugin.on_list_prompts([make_prompt("p1")])
+    snapshot = json.loads(inv_file.read_text())
+    assert len(snapshot["tools"]) == 1
+    assert len(snapshot["resources"]) == 1
+    assert len(snapshot["prompts"]) == 1

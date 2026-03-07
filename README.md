@@ -9,6 +9,7 @@ A configurable proxy for [Model Context Protocol (MCP)](https://modelcontextprot
 - **Filter plugin** — allow-list or deny-list tools, resources, and prompts by glob pattern
 - **Rewrite plugin** — rename tools, inject fixed arguments, prefix response text
 - **Logging plugin** — structured JSONL audit log of all operations with timing
+- **Inventory plugin** — JSON snapshot of all available tools, resources, and prompts for offline analysis
 - **Stdio and HTTP transports** — upstream and proxy transports are independently configurable
 - **Environment variable expansion** — `${VAR}` references in config values
 
@@ -86,6 +87,8 @@ upstreams:
             encoding: "utf-8"
       - type: logging
         log_file: logs/fs.jsonl
+      - type: inventory
+        inventory_file: logs/fs_inventory.json
 
   - name: remote
     namespace: api
@@ -167,6 +170,37 @@ Modifies tool names and call arguments. All renames are symmetric: the plugin tr
 ```
 
 **Note:** If a `filter` plugin is stacked after a `rewrite` plugin in the same list, the filter should use the **exposed** (post-rename) tool names, since it sees the list after renaming.
+
+### `inventory`
+
+Writes a pretty-printed JSON file with the latest known inventory of tools, resources, and prompts. The file is rewritten each time a list hook fires, so it always reflects the most recent state.
+
+| Field | Default | Description |
+|---|---|---|
+| `inventory_file` | required | Path to the JSON output file. Parent dirs are created automatically. |
+
+**Snapshot format:**
+
+```json
+{
+  "ts": "2026-03-07T12:00:00.000000+00:00",
+  "tools": [
+    {
+      "name": "fetch",
+      "description": "Fetches a URL from the internet.",
+      "parameters": { "type": "object", "properties": { "url": { ... } } }
+    }
+  ],
+  "resources": [
+    { "uri": "file:///docs", "name": "docs", "description": "...", "mime_type": "text/plain" }
+  ],
+  "prompts": [
+    { "name": "summarize", "description": "Summarize a document." }
+  ]
+}
+```
+
+Sections appear incrementally — `tools` is present after the first `tools/list`, `resources` after the first `resources/list`, etc.
 
 ## Examples
 

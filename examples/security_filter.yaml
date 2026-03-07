@@ -4,10 +4,11 @@
 # applied to a single upstream MCP server.
 #
 # What this config does:
-#   1. Logs all tool calls (with payloads) for later analysis.
-#   2. Blocks dangerous write/delete tools.
-#   3. Renames an upstream tool to a friendlier exposed name.
-#   4. Injects a fixed argument into every call to "read_file".
+#   1. Saves a JSON inventory of all available tools/resources/prompts.
+#   2. Logs all tool calls (with payloads) for later analysis.
+#   3. Blocks dangerous write/delete tools.
+#   4. Renames an upstream tool to a friendlier exposed name.
+#   5. Injects a fixed argument into every call to "read_file".
 #
 # Usage:
 #   mcp-proxy --config security_filter.yaml
@@ -24,12 +25,16 @@ upstreams:
       args: ["mcp-server-fetch", "/workspace"]
 
     plugins:
-      # 1. Log everything (outermost — sees the original request before rewrites)
+      # 1. Save a snapshot of all tools/resources/prompts for offline analysis
+      - type: inventory
+        inventory_file: logs/tools_inventory.json
+
+      # 2. Log everything (outermost — sees the original request before rewrites)
       - type: logging
         log_file: logs/audit.jsonl
         include_payloads: true
 
-      # 2. Block destructive operations
+      # 3. Block destructive operations
       - type: filter
         block_tools:
           - "write_file"
@@ -38,7 +43,7 @@ upstreams:
           - "create_directory"
           - "edit_file"
 
-      # 3. Rename upstream "read_file" -> client sees "read_document"
+      # 4. Rename upstream "read_file" -> client sees "read_document"
       #    and inject a fixed encoding argument
       - type: rewrite
         tool_renames:

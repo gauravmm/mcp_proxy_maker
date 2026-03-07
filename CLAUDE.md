@@ -21,6 +21,7 @@ src/mcp_proxy/
   plugins/filter_plugin.py   # Allow/block tools/resources/prompts by glob pattern
   plugins/rewrite_plugin.py  # Rename tools, inject args, prefix responses
   plugins/logging_plugin.py  # JSONL audit log
+  plugins/inventory_plugin.py # JSON snapshot of available tools/resources/prompts
   server.py             # build_server() + run_server()
   cli.py                # Click CLI entry point
 examples/               # basic_proxy.yaml, multi_upstream.yaml, security_filter.yaml
@@ -102,6 +103,8 @@ upstreams:
         tool_renames: {upstream_name: exposed_name}
         argument_overrides: {upstream_name: {arg: value}}
         response_prefix: str | null
+      - type: inventory
+        inventory_file: str
 ```
 
 ## JSONL Log Schema (schema_version: 1)

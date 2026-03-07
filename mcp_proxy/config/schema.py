@@ -65,6 +65,11 @@ class FilterPluginConfig(BaseModel):
         return self
 
 
+class InventoryPluginConfig(BaseModel):
+    type: Literal["inventory"]
+    inventory_file: str
+
+
 class RewritePluginConfig(BaseModel):
     type: Literal["rewrite"]
     # Map from upstream tool name -> exposed tool name
@@ -76,7 +81,7 @@ class RewritePluginConfig(BaseModel):
 
 
 PluginConfig = Annotated[
-    LoggingPluginConfig | FilterPluginConfig | RewritePluginConfig,
+    LoggingPluginConfig | FilterPluginConfig | RewritePluginConfig | InventoryPluginConfig,
     Field(discriminator="type"),
 ]
 
