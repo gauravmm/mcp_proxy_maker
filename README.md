@@ -70,7 +70,22 @@ upstreams:
     plugins:
       - type: filter
         allow_tools: ["search", "get_*"]
+
+  - name: notion
+    transport:
+      type: http
+      url: "https://mcp.notion.com/mcp"
+      oauth:
+        client_id: "${NOTION_CLIENT_ID}"
+        client_secret: "${NOTION_CLIENT_SECRET}"
+        scopes: []
 ```
+
+### OAuth 2.0
+
+HTTP upstreams can use OAuth instead of (or in addition to) static headers. Add an `oauth` block to the transport config with `client_id`, `client_secret`, and `scopes`. Tokens are persisted to `.oauth2/<upstream_name>/` so they survive proxy restarts. On first connection, the proxy will open a browser for the OAuth authorization flow.
+
+All three fields are optional and default to `null` -- the upstream server's OAuth discovery endpoint determines what's required.
 
 ### Plugin execution order
 
@@ -144,6 +159,15 @@ Modifies tool names and call arguments. All renames are symmetric: the plugin tr
 
 **Note:** If a `filter` plugin is stacked after a `rewrite` plugin in the same list, the filter should use the **exposed** (post-rename) tool names, since it sees the list after renaming.
 
+### `notion_access`
+
+Content-based access control for Notion MCP upstreams. Enforces per-bot, per-page read/write permissions using emoji markers embedded in the first line of each page. See [README_NOTION.md](README_NOTION.md) for full details.
+
+```yaml
+- type: notion_access
+  bot_name: OcelliBot
+```
+
 ### `inventory`
 
 Writes a pretty-printed JSON file with the latest known inventory of tools, resources, and prompts. The file is rewritten each time a list hook fires, so it always reflects the most recent state.
@@ -206,8 +230,10 @@ The underlying proxy is based on FastMCP, and has all the expected features:
 - **Filter plugin** — allow-list or deny-list tools, resources, and prompts by glob pattern
 - **Rewrite plugin** — rename tools, inject fixed arguments, prefix response text
 - **Logging plugin** — structured JSONL audit log of all operations with timing
+- **Notion access plugin** — per-bot, per-page read/write access control using in-page permission markers
 - **Inventory plugin** — JSON snapshot of all available tools, resources, and prompts for offline analysis
 - **Stdio and HTTP transports** — upstream and proxy transports are independently configurable
+- **OAuth 2.0 support** — HTTP upstreams can authenticate via OAuth with persistent token storage
 - **Environment variable expansion** — `${VAR}` references in config values
 
 ## Examples
