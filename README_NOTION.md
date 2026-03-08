@@ -74,7 +74,7 @@ upstreams:
 | `notion-create-comment` | WRITE | Page must have been fetched with write access. |
 | `notion-duplicate-page` | WRITE | Page must have been fetched with write access. |
 | `notion-move-pages` | WRITE on all pages | Every page in `page_or_database_ids` must have cached write access. |
-| `notion-create-pages` | WRITE on parent | Parent's first line is inherited into each new child page. If no parent is specified, controlled by `allow_workspace_creation`. |
+| `notion-create-pages` | WRITE on parent | Parent's first line is inherited into each new child page (any LLM-provided marker line is stripped first). If no parent is specified, controlled by `allow_workspace_creation`. |
 | `notion-create-database` | Blocked | Blocked by default via `block_tools`. |
 | `notion-update-data-source` | Blocked | Blocked by default via `block_tools`. |
 
@@ -84,7 +84,7 @@ The permission marker line is protected from modification:
 
 - **`update_content`**: If any `old_str` in `content_updates` matches text found in the cached first line, the operation is blocked. Body edits that don't touch the first line pass through normally.
 - **`replace_content`**: The cached first line is automatically prepended to `new_str`, so the markers survive a full content replacement.
-- **`create-pages` with parent**: Each new child page's `content` field is prepended with the parent's first line, inheriting the same access markers.
+- **`create-pages` with parent**: Each new child page's `content` field is prepended with the parent's first line, inheriting the same access markers. If the LLM already included a marker line (any line containing the read or write emoji), it is stripped first to prevent duplication. The proxy is always the authority on the marker — the parent's exact first line is used regardless of what the caller provides.
 
 ## Cache behavior
 

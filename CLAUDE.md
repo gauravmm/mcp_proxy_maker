@@ -32,6 +32,7 @@ src/mcp_proxy/
   plugins/rewrite_plugin.py  # Rename tools, inject args, prefix responses
   plugins/logging_plugin.py  # JSONL audit log
   plugins/inventory_plugin.py # JSON snapshot of available tools/resources/prompts
+  plugins/notion_access_plugin.py # Per-bot page-level access control for Notion upstreams
   server.py             # build_server() + run_server()
   cli.py                # Click CLI entry point
 examples/               # basic_proxy.yaml, multi_upstream.yaml, security_filter.yaml
