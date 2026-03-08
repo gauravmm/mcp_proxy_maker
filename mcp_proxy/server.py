@@ -20,6 +20,7 @@ from .config.schema import (
     HttpTransportConfig,
     InventoryPluginConfig,
     LoggingPluginConfig,
+    NotionAccessPluginConfig,
     OAuthConfig,
     PluginConfig,
     ProxyConfig,
@@ -32,6 +33,7 @@ from .plugins.base import PluginBase
 from .plugins.filter_plugin import FilterPlugin
 from .plugins.inventory_plugin import InventoryPlugin
 from .plugins.logging_plugin import JsonlLoggingPlugin
+from .plugins.notion_access_plugin import NotionAccessPlugin
 from .plugins.rewrite_plugin import RewritePlugin
 
 
@@ -60,6 +62,8 @@ def _build_plugin(config: PluginConfig) -> PluginBase:
         return RewritePlugin(config)
     elif isinstance(config, InventoryPluginConfig):
         return InventoryPlugin(config)
+    elif isinstance(config, NotionAccessPluginConfig):
+        return NotionAccessPlugin(config)
     raise ValueError(f"Unknown plugin type: {config.type}")  # type: ignore[union-attr]
 
 
