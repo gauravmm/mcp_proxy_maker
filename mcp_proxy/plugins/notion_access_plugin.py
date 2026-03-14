@@ -273,7 +273,10 @@ class NotionAccessPlugin(PluginBase):
         if command == "update_content":
             content_updates = args.get("content_updates", [])
             for update in content_updates:
-                old_str = update.get("old_str", "")
+                if isinstance(update, dict):
+                    old_str = update.get("old_str", "")
+                else:
+                    old_str = getattr(update, "old_str", "")
                 if old_str and cached.first_line and old_str in cached.first_line:
                     raise McpError(
                         ErrorData(
