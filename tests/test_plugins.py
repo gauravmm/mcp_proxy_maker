@@ -287,6 +287,7 @@ async def test_rewrite_response_prefix():
     params = make_call_params("tool")
     result = make_tool_result("hello world")
     modified = await plugin.on_call_tool_response(params, result)
+    assert isinstance(modified.content[0], mt.TextContent)
     assert modified.content[0].text == "Info: hello world"
 
 
@@ -841,6 +842,7 @@ async def test_upload_image_success(tmp_path):
                 {"page_id": page_id, "file_path": str(file_path), "caption": "A test image"},
             )
 
+    assert isinstance(result.content[0], mt.TextContent)
     text = result.content[0].text
     assert "photo.png" in text
     assert page_id in text
