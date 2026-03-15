@@ -168,6 +168,18 @@ Content-based access control for Notion MCP upstreams. Enforces per-bot, per-pag
   bot_name: OcelliBot
 ```
 
+### `hive_access`
+
+Workspace and project-scope enforcement for Hive MCP upstreams. Restricts the agent to a configured `workspaceId` and an explicit allowlist of project IDs. Verifies that write-tool `actionIds` belong to allowed projects using a session-lifetime cache populated from `getActions` responses. See [README_HIVE.md](README_HIVE.md) for full details.
+
+```yaml
+- type: hive_access
+  workspace_id: "EXAMPLE_WORKSPACE_ID"
+  allowed_project_ids:
+    - "EXAMPLE_PROJECT_ID_1"
+    - "EXAMPLE_PROJECT_ID_2"
+```
+
 ### `inventory`
 
 Writes a pretty-printed JSON file with the latest known inventory of tools, resources, and prompts. The file is rewritten each time a list hook fires, so it always reflects the most recent state.
@@ -231,6 +243,7 @@ The underlying proxy is based on FastMCP, and has all the expected features:
 - **Rewrite plugin** — rename tools, inject fixed arguments, prefix response text
 - **Logging plugin** — structured JSONL audit log of all operations with timing
 - **Notion access plugin** — per-bot, per-page read/write access control using in-page permission markers
+- **Hive access plugin** — workspace + project allowlist enforcement for Hive upstreams, with action-ownership verification
 - **Inventory plugin** — JSON snapshot of all available tools, resources, and prompts for offline analysis
 - **Stdio and HTTP transports** — upstream and proxy transports are independently configurable
 - **OAuth 2.0 support** — HTTP upstreams can authenticate via OAuth with persistent token storage
@@ -274,4 +287,3 @@ Options:
 ## TODOs
 
 - [ ] Some way for Claude to interactively filter and simplify logs.
-- [ ] A fully worked example.

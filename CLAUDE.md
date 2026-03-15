@@ -23,20 +23,22 @@ Use `uv` for everything — not `python`/`pip` directly.
 ## Project Layout
 
 ```
-src/mcp_proxy/
+mcp_proxy/
   config/schema.py      # Pydantic models (ProxyConfig, plugin configs, transport configs)
   config/loader.py      # YAML load + ${VAR} env expansion
   plugins/base.py       # PluginBase with pass-through defaults for all hooks
   plugins/adapter.py    # PluginChainMiddleware — bridges plugins to fastmcp Middleware
-  plugins/filter_plugin.py   # Allow/block tools/resources/prompts by glob pattern
-  plugins/rewrite_plugin.py  # Rename tools, inject args, prefix responses
-  plugins/logging_plugin.py  # JSONL audit log
-  plugins/inventory_plugin.py # JSON snapshot of available tools/resources/prompts
+  plugins/filter_plugin.py        # Allow/block tools/resources/prompts by glob pattern
+  plugins/rewrite_plugin.py       # Rename tools, inject args, prefix responses
+  plugins/logging_plugin.py       # JSONL audit log
+  plugins/inventory_plugin.py     # JSON snapshot of available tools/resources/prompts
   plugins/notion_access_plugin.py # Per-bot page-level access control for Notion upstreams
+  plugins/hive_access_plugin.py   # Workspace + project scope enforcement for Hive upstreams
   server.py             # build_server() + run_server()
   cli.py                # Click CLI entry point
 examples/               # basic_proxy.yaml, multi_upstream.yaml, security_filter.yaml
-tests/                  # test_config.py, test_plugins.py
+tests/                  # test_config.py, test_plugins.py, test_notion_access_plugin.py,
+                        # test_hive_access_plugin.py
 .claude/skills/
   probe-mcp.md          # /probe-mcp — interactive security probing
   propose-filters.md    # /propose-filters — analyze logs, propose & build mitigations
@@ -58,6 +60,7 @@ tests/                  # test_config.py, test_plugins.py
 - Response hooks run plugin[0] → plugin[1] → ... (same forward order)
 - Blocking: raise `McpError(ErrorData(code=-32601, message="..."))` from any request hook
 - Hiding: set `hide_blocked = True` (default) and override `is_tool_allowed` / `is_resource_allowed` / `is_prompt_allowed`; the adapter auto-filters list responses so you only declare the policy once
+- Upstream client access: override `set_upstream_client(client)` to receive a `fastmcp.Client` for the upstream; `build_server()` calls this automatically on every plugin when `persistent_connection: true` is set on the transport. Use it to make out-of-band verification calls from within a hook.
 
 **Middleware context mutation:**
 `MiddlewareContext` is a frozen dataclass. To pass modified params to `call_next`:
@@ -75,7 +78,8 @@ await call_next(context.copy(message=new_params))
 2. Add it to the `PluginConfig` discriminated union
 3. Subclass `PluginBase` in `plugins/your_plugin.py`, override only the hooks you need
 4. Add a branch in `server._build_plugin()` to instantiate it from config
-5. Add tests in `tests/test_plugins.py`
+5. Add tests in `tests/test_your_plugin.py`
+6. If the plugin needs to call the upstream (e.g. for verification): override `set_upstream_client(client)` to store the client; ensure the upstream uses `persistent_connection: true`
 
 ## Config Schema Summary
 
@@ -123,6 +127,10 @@ upstreams:
         response_prefix: str | null
       - type: inventory
         inventory_file: str
+      - type: hive_access
+        workspace_id: str           # injected into all tools accepting workspaceId
+        allowed_project_ids: [str]  # agent may use a subset; never a superset
+        hide_blocked: bool          # default: true
 ```
 
 ## JSONL Log Schema (schema_version: 2)
@@ -149,6 +157,15 @@ Analyzes probe reports and audit logs to propose mitigations at three levels:
 - **Level 3**: Custom `PluginBase` subclass (content-aware inspection of arguments or responses — e.g. URL domain allowlists, PII redaction, metadata gates)
 
 For Level 3, Claude writes the full plugin: config model in `schema.py`, plugin class, server wiring, and tests.
+
+## Hive Access Plugin Notes
+
+- Always stack `filter` before `hive_access` in the plugin list — filter reduces ~84 tools to ~15, hive_access then scopes those.
+- `persistent_connection: true` is required on the HTTP transport for write-tool action verification (enables `set_upstream_client`).
+- The action→project cache has no TTL (actions are immutable w.r.t. project). It is populated from every `getActions` response.
+- `getActions` with `projectIds: null` (explicit null, not absent) is blocked — it would return project-less actions outside the allowlist.
+- `insertActions` checks `projectId` per action in the request payload; the upstream never sees a disallowed project ID.
+- Write tools (`updateActions*`) that take `actionIds[]` without a `projectId` are verified via the cache + upstream fallback. If an ID can't be resolved after the fallback fetch, the call is blocked conservatively.
 
 ## Key Constraints
 
