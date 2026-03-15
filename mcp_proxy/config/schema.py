@@ -31,6 +31,7 @@ class HttpTransportConfig(BaseModel):
     url: str
     headers: dict[str, str] = {}
     oauth: OAuthConfig | None = None
+    persistent_connection: bool = False
 
 
 TransportConfig = Annotated[
