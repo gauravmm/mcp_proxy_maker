@@ -43,7 +43,27 @@ from .plugins.notion_access_plugin import NotionAccessPlugin
 from .plugins.rewrite_plugin import RewritePlugin
 
 
-def _build_oauth(cfg: OAuthConfig, upstream_name: str) -> OAuth:
+class _RefreshOnStartOAuth(OAuth):
+    """Work around a fastmcp bug where stored tokens are assumed valid on load.
+
+    fastmcp's ``OAuth._initialize`` calls ``update_token_expiry(current_tokens)``
+    which recomputes expiry as ``now + expires_in``, making a stale access token
+    appear fresh for another full TTL.  When the token is then rejected (401),
+    the auth flow jumps straight to a full browser OAuth instead of trying the
+    refresh token first.
+
+    This subclass marks loaded tokens as already expired so the first request
+    always hits the refresh-token path.  The browser flow only opens if the
+    refresh token itself is dead.
+    """
+
+    async def _initialize(self) -> None:
+        await super()._initialize()
+        if self.context.current_tokens:
+            self.context.token_expiry_time = 0
+
+
+def _build_oauth(cfg: OAuthConfig, upstream_name: str) -> _RefreshOnStartOAuth:
     storage_dir = (Path(".oauth2") / upstream_name).resolve()
     storage_dir.mkdir(parents=True, exist_ok=True)
     store = FileTreeStore(
@@ -51,7 +71,7 @@ def _build_oauth(cfg: OAuthConfig, upstream_name: str) -> OAuth:
         key_sanitization_strategy=FileTreeV1KeySanitizationStrategy(storage_dir),
         collection_sanitization_strategy=FileTreeV1CollectionSanitizationStrategy(storage_dir),
     )
-    return OAuth(
+    return _RefreshOnStartOAuth(
         client_id=cfg.client_id,
         client_secret=cfg.client_secret,
         scopes=cfg.scopes,

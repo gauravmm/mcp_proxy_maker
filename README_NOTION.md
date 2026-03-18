@@ -155,3 +155,19 @@ A typical interaction looks like this:
 3. Bot calls `notion-create-pages` under the same page. Plugin checks (from cache) that the parent has WRITE access, prepends the parent's first line to the new page's content.
 4. Bot calls `notion-fetch` on a page that has no markers. Plugin replaces the response with `[ACCESS DENIED] No permission marker for OcelliBot on this page.`
 5. Bot attempts to write to that page. Plugin auto-fetches again (cache miss or TTL expired), finds no marker, and blocks the write.
+
+## OAuth token refresh workaround
+
+The proxy includes a workaround for a fastmcp bug that causes spurious browser OAuth re-authorization flows after a proxy restart.
+
+### The problem
+
+fastmcp's `OAuth._initialize` loads stored tokens from disk and recomputes the expiry as `now + expires_in`. This makes a stale access token (e.g. issued hours ago with a 1-hour TTL) appear valid for another full hour. When the token is sent to Notion and rejected with a 401, the auth flow jumps directly to a full browser-based OAuth flow **without first trying the stored refresh token**.
+
+The result: the browser OAuth window re-opens intermittently after proxy restarts, depending on how long the access token has actually been expired.
+
+### The fix
+
+`_RefreshOnStartOAuth` (in `server.py`) subclasses `OAuth` and marks loaded tokens as already expired after initialization. This forces the first request to take the refresh-token path instead of blindly trusting the stale access token. The browser flow only opens if the refresh token itself has been revoked or expired.
+
+This workaround can be removed once fastmcp fixes the upstream bug (either by storing the actual expiry timestamp or by attempting a refresh on 401 before falling back to full re-authorization).
