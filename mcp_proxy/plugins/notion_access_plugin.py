@@ -592,6 +592,7 @@ def _register_upload_tool(
             placeholder_block_id: str | None = None
             preceding_block_id: str | None = None
             prev_id: str | None = None
+            other_placeholders: list[str] = []
             for block in blocks:
                 rich_text = block.get("paragraph", {}).get("rich_text", [])
                 full_text = "".join(p.get("plain_text", "") for p in rich_text)
@@ -599,14 +600,24 @@ def _register_upload_tool(
                     placeholder_block_id = block["id"]
                     preceding_block_id = prev_id
                     break
+                if f"[{_PLACEHOLDER_PREFIX}" in full_text:
+                    other_placeholders.append(full_text.strip())
                 prev_id = block["id"]
 
             if placeholder_block_id is None:
+                hint = (
+                    f" Found other placeholder(s): {other_placeholders}"
+                    " — the file_path must match exactly."
+                    if other_placeholders
+                    else " No IMAGE_UPLOAD placeholders found on this page."
+                    " Insert one with notion-update-page first,"
+                    f" e.g. content_updates: [{{old_str: '<line>',"
+                    f" new_str: '<line>\\n{placeholder}'}}]."
+                )
                 raise McpError(
                     ErrorData(
                         code=_ERR_ACCESS_DENIED,
-                        message=f"Placeholder '{placeholder}' not found in page {page_id}. "
-                        "Insert it with notion-update-page before calling this tool.",
+                        message=f"Placeholder '{placeholder}' not found in page {page_id}.{hint}",
                     )
                 )
 
