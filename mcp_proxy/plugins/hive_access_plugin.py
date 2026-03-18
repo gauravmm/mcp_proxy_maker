@@ -61,15 +61,26 @@ def _extract_text(result: ToolResult) -> str:
 
 
 def _parse_actions_json(text: str) -> list[dict[str, Any]]:
-    """Try to extract a list of action objects from a getActions response."""
+    """Try to extract a list of action objects from a getActions response.
+
+    Hive may return actions in several formats:
+    - ``{"actions": [...]}`` or ``{"data": [...]}`` or ``{"results": [...]}``
+    - A bare JSON list ``[...]``
+    - GraphQL-style ``{"edges": [{"node": {...}}, ...]}``
+    """
     try:
         data = json.loads(text)
     except (json.JSONDecodeError, ValueError):
         return []
-    # Hive returns {"actions": [...]} or a bare list.
     if isinstance(data, list):
         return data
     if isinstance(data, dict):
+        # GraphQL edges/node format.
+        edges = data.get("edges")
+        if isinstance(edges, list):
+            return [
+                e["node"] for e in edges if isinstance(e, dict) and isinstance(e.get("node"), dict)
+            ]
         for key in ("actions", "data", "results"):
             if isinstance(data.get(key), list):
                 return data[key]

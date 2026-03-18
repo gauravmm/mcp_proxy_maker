@@ -201,6 +201,25 @@ async def test_get_actions_response_populates_cache():
 
 
 @pytest.mark.asyncio
+async def test_get_actions_response_edges_format_populates_cache():
+    """Hive may return actions in GraphQL edges/node format."""
+    p = _plugin()
+    params = _call("getActions", {"projectIds": [PROJECT_A]})
+    payload = json.dumps(
+        {
+            "edges": [
+                {"node": {"_id": "action1", "projectId": PROJECT_A}},
+                {"node": {"_id": "action2", "projectId": PROJECT_B}},
+            ],
+            "pageInfo": {"hasNextPage": False},
+        }
+    )
+    await p.on_call_tool_response(params, _result(payload))
+    assert p._action_project_cache["action1"] == PROJECT_A
+    assert p._action_project_cache["action2"] == PROJECT_B
+
+
+@pytest.mark.asyncio
 async def test_non_get_actions_response_not_cached():
     p = _plugin()
     params = _call("updateActionsStatus", {"actionIds": ["action1"]})
