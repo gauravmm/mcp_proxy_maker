@@ -23,7 +23,6 @@ from typing import TYPE_CHECKING
 
 import httpx
 import mcp.types as mt
-from fastmcp.client.client import CallToolResult
 from fastmcp.tools.tool import Tool, ToolResult
 from mcp import McpError
 from mcp.types import ErrorData
@@ -33,6 +32,7 @@ from .base import PluginBase
 
 if TYPE_CHECKING:
     from fastmcp import Client, FastMCP
+    from fastmcp.client.client import CallToolResult
 
 _ERR_ACCESS_DENIED = -32601
 _NOTION_API = "https://api.notion.com/v1"
@@ -594,6 +594,7 @@ def _register_upload_tool(
             preceding_block_id: str | None = None
             prev_id: str | None = None
             other_placeholders: list[str] = []
+            prefix_marker = f"[{_PLACEHOLDER_PREFIX}"
             for block in blocks:
                 rich_text = block.get("paragraph", {}).get("rich_text", [])
                 full_text = "".join(p.get("plain_text", "") for p in rich_text)
@@ -601,24 +602,28 @@ def _register_upload_tool(
                     placeholder_block_id = block["id"]
                     preceding_block_id = prev_id
                     break
-                if f"[{_PLACEHOLDER_PREFIX}" in full_text:
+                if prefix_marker in full_text:
                     other_placeholders.append(full_text.strip())
                 prev_id = block["id"]
 
             if placeholder_block_id is None:
-                hint = (
-                    f" Found other placeholder(s): {other_placeholders}"
-                    " — the file_path must match exactly."
-                    if other_placeholders
-                    else " No IMAGE_UPLOAD placeholders found on this page."
-                    " Insert one with notion-update-page first,"
-                    f" e.g. content_updates: [{{old_str: '<line>',"
-                    f" new_str: '<line>\\n{placeholder}'}}]."
-                )
+                if other_placeholders:
+                    hint = (
+                        f" Found other placeholder(s): {other_placeholders}"
+                        " — the file_path must match exactly."
+                    )
+                else:
+                    hint = (
+                        " No IMAGE_UPLOAD placeholders found on this page."
+                        " Insert one with notion-update-page first,"
+                        f" e.g. content_updates: [{{old_str: '<line>',"
+                        f" new_str: '<line>\\n{placeholder}'}}]."
+                    )
                 raise McpError(
                     ErrorData(
                         code=_ERR_ACCESS_DENIED,
-                        message=f"Placeholder '{placeholder}' not found in page {page_id}.{hint}",
+                        message=f"Placeholder '{placeholder}' not found"
+                        f" in page {page_id}.{hint}",
                     )
                 )
 
