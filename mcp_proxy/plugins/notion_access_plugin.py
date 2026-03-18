@@ -38,6 +38,19 @@ _NOTION_API = "https://api.notion.com/v1"
 _NOTION_VERSION = "2022-06-28"
 _PLACEHOLDER_PREFIX = "IMAGE_UPLOAD:"
 
+_NOTION_S3_IMAGE_RE = re.compile(
+    r"!\[([^\]]*)\]"
+    r"\("
+    r"(https://prod-files-secure\.s3\.[a-z0-9-]+\.amazonaws\.com/"
+    r"[0-9a-f-]+/"
+    r"([0-9a-f-]+)/"
+    r"([^?\s)]+)"
+    r"\?[^)\s]*)"
+    r"\)"
+)
+
+_IMAGE_PLACEHOLDER_RE = re.compile(r"!\[[^\]]*\]\(notion-image:[^)]+\)\n?")
+
 # Tools that don't operate on specific pages
 _PASSTHROUGH_TOOLS = {"notion-search", "notion-get-teams", "notion-get-users"}
 
@@ -49,6 +62,13 @@ class AccessLevel(enum.Enum):
     NONE = 0
     READ = 1
     WRITE = 2
+
+
+@dataclass
+class CachedImage:
+    filename: str
+    alt_text: str
+    signed_url: str
 
 
 @dataclass
@@ -136,6 +156,11 @@ def _extract_page_id_from_fetch_args(arguments: dict | None) -> str | None:
     return arguments.get("id")
 
 
+def _strip_image_placeholders(text: str) -> str:
+    """Remove notion-image: markdown placeholders from text."""
+    return _IMAGE_PLACEHOLDER_RE.sub("", text)
+
+
 def _make_error_result(message: str) -> ToolResult:
     """Create a ToolResult with an error message."""
     return ToolResult(content=[mt.TextContent(type="text", text=f"[ACCESS DENIED] {message}")])
@@ -152,6 +177,7 @@ class NotionAccessPlugin(PluginBase):
         self._allow_workspace_creation = config.allow_workspace_creation
         self._block_tools = set(config.block_tools)
         self._cache: dict[str, CachedPermission] = {}
+        self._image_cache: dict[str, dict[str, CachedImage]] = {}
         self._notion_token = config.notion_token
         self.hide_blocked = config.hide_blocked
         self._client: Client | None = None
@@ -312,11 +338,15 @@ class NotionAccessPlugin(PluginBase):
 
         if command == "update_content":
             content_updates = args.get("content_updates", [])
+            new_updates = []
+            updates_changed = False
             for update in content_updates:
                 if isinstance(update, dict):
                     old_str = update.get("old_str", "")
+                    new_str = update.get("new_str", "")
                 else:
                     old_str = getattr(update, "old_str", "")
+                    new_str = getattr(update, "new_str", "")
                 if old_str and cached.first_line and old_str in cached.first_line:
                     raise McpError(
                         ErrorData(
@@ -327,9 +357,20 @@ class NotionAccessPlugin(PluginBase):
                             ),
                         )
                     )
+                if isinstance(update, dict):
+                    stripped = _strip_image_placeholders(new_str)
+                    if stripped != new_str:
+                        updates_changed = True
+                        update = dict(update)
+                        update["new_str"] = stripped
+                new_updates.append(update)
+            if updates_changed:
+                args["content_updates"] = new_updates
+                return mt.CallToolRequestParams(name=params.name, arguments=args)
 
         elif command == "replace_content":
             new_str = args.get("new_str", "")
+            new_str = _strip_image_placeholders(new_str)
             args["new_str"] = cached.first_line + "\n" + new_str
             return mt.CallToolRequestParams(name=params.name, arguments=args)
 
@@ -385,6 +426,45 @@ class NotionAccessPlugin(PluginBase):
     # on_call_tool_response: inspect notion-fetch responses
     # ------------------------------------------------------------------
 
+    def _shorten_image_urls(self, page_id: str, result: ToolResult) -> ToolResult:
+        """Replace S3 signed image URLs with stable notion-image: placeholders.
+
+        Populates ``_image_cache[page_id]`` as a side-effect (full replacement).
+        Returns the original result object unchanged if no images are found.
+        """
+        if not result.content:
+            return result
+
+        normalized_page_id = _normalize_page_id(page_id)
+        new_cache: dict[str, CachedImage] = {}
+
+        def _replace(m: re.Match) -> str:
+            alt_text = m.group(1)
+            full_url = m.group(2)
+            block_id = m.group(3)
+            filename = m.group(4)
+            new_cache[block_id] = CachedImage(
+                filename=filename, alt_text=alt_text, signed_url=full_url
+            )
+            return f"![{alt_text}](notion-image:{block_id}/{filename})"
+
+        new_content = []
+        changed = False
+        for block in result.content:
+            if isinstance(block, mt.TextContent):
+                new_text = _NOTION_S3_IMAGE_RE.sub(_replace, block.text)
+                if new_text != block.text:
+                    changed = True
+                new_content.append(mt.TextContent(type="text", text=new_text))
+            else:
+                new_content.append(block)
+
+        if not changed:
+            return result
+
+        self._image_cache[normalized_page_id] = new_cache
+        return ToolResult(content=new_content)
+
     async def on_call_tool_response(
         self,
         params: mt.CallToolRequestParams,
@@ -409,7 +489,7 @@ class NotionAccessPlugin(PluginBase):
         if level == AccessLevel.NONE:
             return _make_error_result(f"No permission marker for {self._bot_name} on this page.")
 
-        return result
+        return self._shorten_image_urls(page_id, result)
 
     # ------------------------------------------------------------------
     # Synthetic tool registration
@@ -423,6 +503,7 @@ class NotionAccessPlugin(PluginBase):
             )
             return
         _register_upload_tool(server, self, self._notion_token)
+        _register_delete_image_tool(server, self, self._notion_token)
 
 
 def _register_upload_tool(
@@ -551,3 +632,65 @@ def _register_upload_tool(
             resp.raise_for_status()
 
         return f"Image '{path.name}' uploaded and inserted into page {page_id}."
+
+
+def _register_delete_image_tool(
+    server: FastMCP,  # noqa: F821
+    plugin: NotionAccessPlugin,
+    token: str,
+) -> None:
+    """Register the notion-delete-image tool on the aggregator server."""
+
+    @server.tool(name="notion-delete-image")
+    async def notion_delete_image(page_id: str, block_ids: list[str]) -> str:
+        """Delete image blocks from a Notion page.
+
+        Use this tool to remove images before using replace_content on a page
+        that contains images. The block IDs come from the
+        ``notion-image:BLOCK_ID/FILENAME`` placeholders shown in
+        ``notion-fetch`` output.
+
+        Args:
+            page_id: ID of the Notion page containing the images.
+            block_ids: List of image block IDs to delete.
+        """
+        page_id = _normalize_page_id(page_id)
+
+        # Require WRITE permission — auto-fetches if not cached.
+        await plugin._ensure_cached(page_id, AccessLevel.WRITE)
+
+        json_headers = {
+            "Authorization": f"Bearer {token}",
+            "Notion-Version": _NOTION_VERSION,
+            "Content-Type": "application/json",
+        }
+
+        deleted: list[str] = []
+        errors: list[str] = []
+
+        async with httpx.AsyncClient() as client:
+            for block_id in block_ids:
+                try:
+                    resp = await client.delete(
+                        f"{_NOTION_API}/blocks/{block_id}",
+                        headers=json_headers,
+                    )
+                    resp.raise_for_status()
+                    deleted.append(block_id)
+                    if page_id in plugin._image_cache:
+                        plugin._image_cache[page_id].pop(block_id, None)
+                except Exception as exc:
+                    errors.append(f"{block_id}: {exc}")
+
+        if errors and not deleted:
+            raise McpError(
+                ErrorData(
+                    code=_ERR_ACCESS_DENIED,
+                    message=f"All deletions failed: {'; '.join(errors)}",
+                )
+            )
+
+        summary = f"Deleted {len(deleted)} image block(s) from page {page_id}."
+        if errors:
+            summary += f" Errors: {'; '.join(errors)}"
+        return summary

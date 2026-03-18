@@ -20,6 +20,14 @@ notion-fetch
 
 The proxy checks the page's first line for a permission marker (`BotName 🖊` for read-write, `BotName 👀` for read-only). If your bot is not listed, the response is replaced with an access denied error. On success, the permission is cached for subsequent operations.
 
+**Images** appear as short placeholders instead of raw S3 URLs:
+
+```
+![alt text](notion-image:BLOCK_ID/filename.jpg)
+```
+
+The block ID from the placeholder is what you pass to `notion-delete-image`.
+
 Search across the workspace without needing to fetch first:
 
 ```
@@ -58,6 +66,29 @@ notion-create-pages
   parent: { page_id: "<parent-page-id>" }
   ...
 ```
+
+### Removing images
+
+Pages with images cannot be fully replaced via `replace_content` until the image blocks are deleted. Use a two-step workflow:
+
+**Step 1** — Delete the image blocks (block IDs come from `notion-image:` placeholders):
+
+```
+notion-delete-image
+  page_id: "..."
+  block_ids: ["BLOCK_ID_1", "BLOCK_ID_2"]
+```
+
+**Step 2** — Now `replace_content` succeeds (no image blocks remain):
+
+```
+notion-update-page
+  page_id: "..."
+  command: replace_content
+  new_str: "# New content\n..."
+```
+
+Any `notion-image:` placeholders accidentally included in `replace_content` or `update_content` are automatically stripped — the upstream never sees the `notion-image:` scheme.
 
 ### Uploading images
 
@@ -120,3 +151,4 @@ Standard Markdown mostly works. Key differences:
 | `[ACCESS DENIED] No permission marker` | Bot not listed on this page | Ask the workspace owner to add `BotName 🖊` to the first line |
 | `[ACCESS DENIED] Cannot modify permission markers` | Edit targeted the first line | Adjust `old_str` to not include the first line |
 | `Placeholder '...' not found` | Placeholder was not inserted or path mismatch | Insert the placeholder with `notion-update-page` first |
+| `replace_content` fails on a page with images | Image blocks can't be handled by text replacement | Call `notion-delete-image` first, then `replace_content` |
