@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING
 
 import httpx
 import mcp.types as mt
+from fastmcp.client.client import CallToolResult
 from fastmcp.tools.tool import Tool, ToolResult
 from mcp import McpError
 from mcp.types import ErrorData
@@ -129,8 +130,8 @@ def _parse_permission(
     return AccessLevel.NONE, first_line
 
 
-def _extract_text(result: ToolResult) -> str:
-    """Extract concatenated text content from a ToolResult."""
+def _extract_text(result: ToolResult | CallToolResult) -> str:
+    """Extract concatenated text content from a tool result."""
     if not result.content:
         return ""
     parts = []
