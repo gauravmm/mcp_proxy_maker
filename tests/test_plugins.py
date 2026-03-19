@@ -742,7 +742,25 @@ async def test_upload_image_no_token_emits_warning(caplog):
     # Tool should not be registered
     async with Client(server) as client:
         tools = await client.list_tools()
-    assert "notion-upload-image" not in {t.name for t in tools}
+    tool_names = {t.name for t in tools}
+    assert "notion-upload-image" not in tool_names
+    assert "notion-delete-image" not in tool_names
+
+
+@pytest.mark.asyncio
+async def test_image_tools_registered_with_token():
+    from fastmcp import Client, FastMCP
+
+    plugin = make_notion_access_plugin(notion_token="secret-token")
+    server = FastMCP("test")
+    plugin.register_tools(server)
+
+    async with Client(server) as client:
+        tools = await client.list_tools()
+
+    tool_names = {t.name for t in tools}
+    assert "notion-upload-image" in tool_names
+    assert "notion-delete-image" in tool_names
 
 
 @pytest.mark.asyncio
@@ -834,7 +852,8 @@ async def test_upload_image_success(tmp_path):
     mock_client.delete = AsyncMock(return_value=responses[3])
 
     with patch(
-        "mcp_proxy.plugins.notion_access_plugin.httpx.AsyncClient", return_value=mock_client
+        "mcp_proxy.plugins.notion_access_plugin.image_tools.httpx.AsyncClient",
+        return_value=mock_client,
     ):
         async with Client(server) as client:
             result = await client.call_tool(
