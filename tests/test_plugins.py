@@ -761,7 +761,7 @@ async def test_upload_image_requires_write_permission(tmp_path):
 
     # Call the tool without fetching the page first (no cached permission)
     async with Client(server) as client:
-        with pytest.raises(ToolError, match="not in cache"):
+        with pytest.raises(ToolError, match="not cached"):
             await client.call_tool(
                 "notion-upload-image",
                 {"page_id": "page-abc", "file_path": str(img)},

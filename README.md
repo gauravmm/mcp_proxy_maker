@@ -181,7 +181,7 @@ Modifies tool names and call arguments. All renames are symmetric: the plugin tr
 
 ### `notion_access`
 
-Content-based access control for Notion MCP upstreams. Enforces per-bot, per-page read/write permissions using emoji markers embedded in the first line of each page. Permissions are checked and cached transparently — bots can write directly without a prior fetch. See [README_NOTION.md](README_NOTION.md) for full details.
+Content-based access control for Notion MCP upstreams. Enforces per-bot, per-page read/write permissions using emoji markers embedded in the first line of each page. Permissions are checked and cached transparently, child pages must inherit a parent marker line, and image changes go through dedicated image tools. See [README_NOTION.md](README_NOTION.md) for full details.
 
 ```yaml
 - type: notion_access

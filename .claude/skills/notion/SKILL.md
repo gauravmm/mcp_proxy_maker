@@ -46,7 +46,7 @@ notion-update-page
   content_updates: [{ old_str: "old text", new_str: "new text" }]
 ```
 
-**Replace entire content** (the proxy automatically re-prepends the permission marker line):
+**Replace entire content** (the proxy automatically re-prepends the permission marker line on text-only pages):
 
 ```
 notion-update-page
@@ -92,9 +92,7 @@ notion-update-page
   new_str: "# New content\n..."
 ```
 
-**Images cannot be repositioned or preserved through text editing.** `notion-image:` placeholders in `new_str` are automatically stripped before the request reaches the upstream — including them does NOT keep the image in place, it just silently removes the placeholder while the image block remains on the page. To move an image: delete it with `notion-delete-image`, then re-upload it at the new position with `notion-upload-image`.
-
-Using a `notion-image:` placeholder in `old_str` will silently fail to match anything (the upstream stores real image blocks, not the `notion-image:` scheme), so the edit is a no-op.
+**Images cannot be repositioned or preserved through text editing.** Any `notion-image:` placeholder in `old_str` or `new_str` causes the proxy to reject the edit. To move an image: delete it with `notion-delete-image`, then re-upload it at the new position with `notion-upload-image`.
 
 ### Uploading images
 

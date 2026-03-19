@@ -108,12 +108,8 @@ class NotionAccessPluginConfig(BaseModel):
     read_emoji: str = "👀"
     write_emoji: str = "🖊"
     cache_ttl_seconds: int = 60
-    allow_workspace_creation: bool = False
     block_tools: list[str] = ["notion-create-database", "notion-update-data-source"]
     notion_token: str | None = None
-    # When True (default), blocked tools are hidden from list responses.
-    # When False, blocked tools appear in listings but calls are still rejected.
-    hide_blocked: bool = True
 
 
 class HiveAccessPluginConfig(BaseModel):

@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING
 import httpx
 import mcp.types as mt
 from fastmcp import Client
-from fastmcp.tools.tool import Tool, ToolResult
+from fastmcp.tools.tool import ToolResult
 from mcp import McpError
 from mcp.types import ErrorData
 
@@ -155,9 +155,9 @@ def _extract_page_id_from_fetch_args(arguments: dict | None) -> str | None:
     return arguments.get("id")
 
 
-def _strip_image_placeholders(text: str) -> str:
-    """Remove notion-image: markdown placeholders from text."""
-    return _IMAGE_PLACEHOLDER_RE.sub("", text)
+def _contains_image_placeholder(text: str) -> bool:
+    """Return True when the text contains a notion-image placeholder."""
+    return isinstance(text, str) and _IMAGE_PLACEHOLDER_RE.search(text) is not None
 
 
 def _make_error_result(message: str) -> ToolResult:
@@ -173,12 +173,10 @@ class NotionAccessPlugin(PluginBase):
         self._read_emoji = config.read_emoji
         self._write_emoji = config.write_emoji
         self._ttl = config.cache_ttl_seconds
-        self._allow_workspace_creation = config.allow_workspace_creation
         self._block_tools = set(config.block_tools)
         self._cache: dict[str, CachedPermission] = {}
         self._image_cache: dict[str, dict[str, CachedImage]] = {}
         self._notion_token = config.notion_token
-        self.hide_blocked = config.hide_blocked
         self._client: Client | None = None
 
     # ------------------------------------------------------------------
@@ -262,15 +260,6 @@ class NotionAccessPlugin(PluginBase):
         return name not in self._block_tools
 
     # ------------------------------------------------------------------
-    # on_list_tools: remove blocked tools (when hide_blocked is True)
-    # ------------------------------------------------------------------
-
-    async def on_list_tools(self, tools: list[Tool]) -> list[Tool]:
-        if not self.hide_blocked:
-            return tools
-        return [t for t in tools if self.is_tool_allowed(t.name)]
-
-    # ------------------------------------------------------------------
     # on_call_tool_request: route per tool
     # ------------------------------------------------------------------
 
@@ -314,10 +303,11 @@ class NotionAccessPlugin(PluginBase):
     def _protect_first_line(
         self, params: mt.CallToolRequestParams, cached: CachedPermission
     ) -> mt.CallToolRequestParams:
-        """For update_content: block edits targeting the first line.
-        For replace_content: prepend the cached first line."""
+        """Protect permission markers and reject image mutations in text edits."""
         args = dict(params.arguments or {})
         command = args.get("command", "")
+        page_id = args.get("page_id", "")
+        has_cached_images = bool(self._image_cache.get(_normalize_page_id(page_id)))
 
         if command == "update_content":
             content_updates = args.get("content_updates", [])
@@ -325,7 +315,17 @@ class NotionAccessPlugin(PluginBase):
                 assert isinstance(update, dict)
                 old_str = update.get("old_str", "")
                 new_str = update.get("new_str", "")
-                update["new_str"] = _strip_image_placeholders(new_str)
+
+                if _contains_image_placeholder(old_str) or _contains_image_placeholder(new_str):
+                    raise McpError(
+                        ErrorData(
+                            code=_ERR_ACCESS_DENIED,
+                            message=(
+                                "Text edits cannot target notion-image placeholders. "
+                                "Use notion-delete-image and notion-upload-image for image changes."
+                            ),
+                        )
+                    )
 
                 if old_str and (old_str in cached.first_line or cached.first_line in old_str):
                     raise McpError(
@@ -340,7 +340,30 @@ class NotionAccessPlugin(PluginBase):
 
         elif command == "replace_content":
             new_str = args.get("new_str", "")
-            new_str = _strip_image_placeholders(new_str)
+
+            if has_cached_images:
+                raise McpError(
+                    ErrorData(
+                        code=_ERR_ACCESS_DENIED,
+                        message=(
+                            "replace_content is blocked on pages with images. "
+                            "Delete the image blocks with notion-delete-image "
+                            "before replacing page text."
+                        ),
+                    )
+                )
+
+            if _contains_image_placeholder(new_str):
+                raise McpError(
+                    ErrorData(
+                        code=_ERR_ACCESS_DENIED,
+                        message=(
+                            "Text edits cannot include notion-image placeholders. "
+                            "Use notion-delete-image and notion-upload-image for image changes."
+                        ),
+                    )
+                )
+
             args["new_str"] = cached.first_line + "\n" + new_str
             return mt.CallToolRequestParams(name=params.name, arguments=args)
 
@@ -359,61 +382,54 @@ class NotionAccessPlugin(PluginBase):
     async def _handle_create_pages_request(
         self, params: mt.CallToolRequestParams
     ) -> mt.CallToolRequestParams:
-        """Check parent permission for create-pages; inherit first line."""
+        """Require a parent page and inherit its permission marker line."""
         args = dict(params.arguments or {})
         parent = args.get("parent")
 
         # Handle parent passed as a JSON string instead of a dict
-        if parent and isinstance(parent, str):
-            try:
-                parent = json.loads(parent)
-                args["parent"] = parent
-            except (json.JSONDecodeError, ValueError):
-                pass
+        if parent:
+            # Coerce to dict if it's a JSON string (e.g. from a prompt template)
+            if isinstance(parent, str):
+                try:
+                    parent = json.loads(parent)
+                    args["parent"] = parent
+                except (json.JSONDecodeError, ValueError):
+                    pass
 
-        if parent and isinstance(parent, dict):
-            parent_page_id = parent.get("page_id", "")
-            if parent_page_id:
-                cached = await self._ensure_cached(parent_page_id, AccessLevel.WRITE)
-                # Inherit the permission first line into each new page
-                pages = args.get("pages", [])
-                new_pages = []
-                for page in pages:
-                    page = dict(page)
-                    content = self._strip_marker_line(page.get("content", ""))
-                    page["content"] = cached.first_line + "\n" + content
-                    new_pages.append(page)
-                args["pages"] = new_pages
-                return mt.CallToolRequestParams(name=params.name, arguments=args)
+            assert isinstance(parent, dict), "Parent must be a dict with a page_id"
+            cached = await self._ensure_cached(parent["page_id"], AccessLevel.WRITE)
+
+            new_pages = []
+            for page in args.get("pages", []):
+                content = self._strip_marker_line(page.get("content", ""))
+                page["content"] = cached.first_line + "\n" + content
+                new_pages.append(page)
+            args["pages"] = new_pages
+            return mt.CallToolRequestParams(name=params.name, arguments=args)
+
         else:
-            # No parent specified — workspace-level creation
-            if not self._allow_workspace_creation:
-                # Detect parent mistakenly placed inside page objects
-                pages = args.get("pages", [])
-                has_nested_parent = any(isinstance(p, dict) and "parent" in p for p in pages)
-                if has_nested_parent:
-                    raise McpError(
-                        ErrorData(
-                            code=_ERR_ACCESS_DENIED,
-                            message=(
-                                "Found 'parent' inside page objects, but 'parent' "
-                                "must be a top-level argument. Use: "
-                                "{parent: {page_id: '...'}, "
-                                "pages: [{properties: ..., content: ...}]}"
-                            ),
-                        )
-                    )
+            # Check for misuse of the old format where 'parent' is nested inside each page object
+            if any(isinstance(p, dict) and "parent" in p for p in args.get("pages", [])):
                 raise McpError(
                     ErrorData(
                         code=_ERR_ACCESS_DENIED,
                         message=(
-                            "Workspace-level page creation is not allowed. "
-                            "Specify a parent page_id as a top-level argument."
+                            "Found 'parent' inside page objects, but 'parent' "
+                            "must be a top-level argument. Use: "
+                            "{parent: {page_id: '...'}, "
+                            "pages: [{properties: ..., content: ...}]}"
                         ),
                     )
                 )
-
-        return params
+            raise McpError(
+                ErrorData(
+                    code=_ERR_ACCESS_DENIED,
+                    message=(
+                        "Workspace-level page creation is not allowed. "
+                        "Specify a top-level parent.page_id argument."
+                    ),
+                )
+            )
 
     # ------------------------------------------------------------------
     # on_call_tool_response: inspect notion-fetch responses
@@ -453,6 +469,7 @@ class NotionAccessPlugin(PluginBase):
                 new_content.append(block)
 
         if not changed:
+            self._image_cache.pop(normalized_page_id, None)
             return result
 
         self._image_cache[normalized_page_id] = new_cache

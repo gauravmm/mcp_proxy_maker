@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import mcp.types as mt
 import pytest
-from fastmcp.tools.tool import Tool, ToolResult
+from fastmcp.tools.tool import ToolResult
 from mcp import McpError
 
 from mcp_proxy.config.schema import NotionAccessPluginConfig
 from mcp_proxy.plugins.notion_access_plugin import (
-    _IMAGE_PLACEHOLDER_RE,
     _NOTION_S3_IMAGE_RE,
     AccessLevel,
     NotionAccessPlugin,
@@ -39,10 +38,6 @@ def _plugin(**overrides) -> NotionAccessPlugin:
 
 def make_call(name: str, arguments: dict | None = None) -> mt.CallToolRequestParams:
     return mt.CallToolRequestParams(name=name, arguments=arguments)
-
-
-def make_tool(name: str) -> Tool:
-    return Tool(name=name, description="test", parameters={"type": "object", "properties": {}})
 
 
 def make_result(text: str) -> ToolResult:
@@ -208,7 +203,7 @@ async def test_write_blocked_with_read_only():
     )
     with pytest.raises(McpError) as exc:
         await plugin.on_call_tool_request(write_params)
-    assert "read-write" in str(exc.value).lower() or "permission" in str(exc.value).lower()
+    assert "write" in str(exc.value).lower() or "permission" in str(exc.value).lower()
 
 
 # ---------------------------------------------------------------------------
@@ -308,6 +303,7 @@ async def test_replace_content_prepends_first_line():
 # create-pages inheritance
 # ---------------------------------------------------------------------------
 
+
 def _create_page(title: str, content: str = "") -> dict:
     """Build a page dict (no parent — parent is top-level in the API)."""
     page: dict = {"properties": {"title": title}}
@@ -395,7 +391,7 @@ async def test_create_pages_no_content():
 
 @pytest.mark.asyncio
 async def test_create_pages_without_parent_blocked():
-    plugin = _plugin(allow_workspace_creation=False)
+    plugin = _plugin()
     create_params = make_call(
         "notion-create-pages",
         {"pages": [{"properties": {"title": "Root"}, "content": "stuff"}]},
@@ -408,7 +404,7 @@ async def test_create_pages_without_parent_blocked():
 @pytest.mark.asyncio
 async def test_create_pages_nested_parent_gives_helpful_error():
     """Parent inside page objects (wrong format) gives a specific error message."""
-    plugin = _plugin(allow_workspace_creation=False)
+    plugin = _plugin()
     create_params = make_call(
         "notion-create-pages",
         {"pages": [{"parent": {"page_id": "p1"}, "properties": {"title": "X"}}]},
@@ -439,17 +435,6 @@ async def test_create_pages_string_parent_decoded():
     assert "Body text." in page_content
 
 
-@pytest.mark.asyncio
-async def test_create_pages_without_parent_allowed():
-    plugin = _plugin(allow_workspace_creation=True)
-    create_params = make_call(
-        "notion-create-pages",
-        {"pages": [{"properties": {"title": "Root"}, "content": "stuff"}]},
-    )
-    out = await plugin.on_call_tool_request(create_params)
-    assert out.arguments["pages"][0]["content"] == "stuff"
-
-
 # ---------------------------------------------------------------------------
 # Blocked tools
 # ---------------------------------------------------------------------------
@@ -464,21 +449,12 @@ async def test_blocked_tool_raises():
     assert "blocked" in str(exc.value).lower()
 
 
-@pytest.mark.asyncio
-async def test_blocked_tools_removed_from_list():
+def test_blocked_tool_policy_declared():
     plugin = _plugin()
-    tools = [
-        make_tool("notion-search"),
-        make_tool("notion-create-database"),
-        make_tool("notion-update-data-source"),
-        make_tool("notion-fetch"),
-    ]
-    out = await plugin.on_list_tools(tools)
-    names = [t.name for t in out]
-    assert "notion-create-database" not in names
-    assert "notion-update-data-source" not in names
-    assert "notion-search" in names
-    assert "notion-fetch" in names
+    assert plugin.hide_blocked is True
+    assert plugin.is_tool_allowed("notion-search") is True
+    assert plugin.is_tool_allowed("notion-create-database") is False
+    assert plugin.is_tool_allowed("notion-update-data-source") is False
 
 
 # ---------------------------------------------------------------------------
@@ -650,7 +626,7 @@ async def test_auto_fetch_read_only_blocks_write():
     params = make_call("notion-update-page", {"page_id": "page1", "command": "update_properties"})
     with pytest.raises(McpError) as exc:
         await plugin.on_call_tool_request(params)
-    assert "read-write" in str(exc.value).lower()
+    assert "write" in str(exc.value).lower()
 
 
 @pytest.mark.asyncio
@@ -830,13 +806,57 @@ async def test_refetch_replaces_image_cache_atomically():
     assert _BLOCK_ID_2 in plugin._image_cache.get(normalized, {})
 
 
+@pytest.mark.asyncio
+async def test_refetch_without_images_clears_image_cache():
+    plugin = _plugin()
+    params = make_call("notion-fetch", {"id": "page1"})
+
+    await plugin.on_call_tool_response(
+        params,
+        make_result(_notion_page(f"{BOT} {WRITE_EMOJI}", body=_image_md("A"))),
+    )
+
+    assert _normalize_page_id("page1") in plugin._image_cache
+
+    out = await plugin.on_call_tool_response(
+        params,
+        make_result(_notion_page(f"{BOT} {WRITE_EMOJI}", body="No images remain.")),
+    )
+
+    assert out.content[0].text.endswith("No images remain.\n</content>\n</page>")
+    assert _normalize_page_id("page1") not in plugin._image_cache
+
+
 # ---------------------------------------------------------------------------
-# Image placeholder stripping (on_call_tool_request)
+# Image placeholder edits are rejected
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_replace_content_strips_image_placeholders():
+async def test_replace_content_with_images_blocked():
+    plugin = _plugin()
+    fetch_params = make_call("notion-fetch", {"id": "page1"})
+    first_line = f"{BOT} {WRITE_EMOJI}"
+    await plugin.on_call_tool_response(
+        fetch_params,
+        make_result(_notion_page(first_line, body=_image_md("Photo"))),
+    )
+
+    replace_params = make_call(
+        "notion-update-page",
+        {
+            "page_id": "page1",
+            "command": "replace_content",
+            "new_str": "Some text\nMore text",
+        },
+    )
+    with pytest.raises(McpError) as exc:
+        await plugin.on_call_tool_request(replace_params)
+    assert "notion-delete-image" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_replace_content_with_placeholder_rejected():
     plugin = _plugin()
     fetch_params = make_call("notion-fetch", {"id": "page1"})
     first_line = f"{BOT} {WRITE_EMOJI}"
@@ -848,18 +868,16 @@ async def test_replace_content_strips_image_placeholders():
         {
             "page_id": "page1",
             "command": "replace_content",
-            "new_str": f"Some text\n{ph}\nMore text",
+            "new_str": f"new body\n{ph}",
         },
     )
-    out = await plugin.on_call_tool_request(replace_params)
-    new_str = out.arguments["new_str"]
-    assert "notion-image:" not in new_str
-    assert "Some text" in new_str
-    assert "More text" in new_str
+    with pytest.raises(McpError) as exc:
+        await plugin.on_call_tool_request(replace_params)
+    assert "notion-image" in str(exc.value)
 
 
 @pytest.mark.asyncio
-async def test_update_content_strips_new_str_placeholders():
+async def test_update_content_new_placeholder_rejected():
     plugin = _plugin()
     fetch_params = make_call("notion-fetch", {"id": "page1"})
     first_line = f"{BOT} {WRITE_EMOJI}"
@@ -874,14 +892,13 @@ async def test_update_content_strips_new_str_placeholders():
             "content_updates": [{"old_str": "body text", "new_str": f"new body\n{ph}"}],
         },
     )
-    out = await plugin.on_call_tool_request(update_params)
-    new_str = out.arguments["content_updates"][0]["new_str"]
-    assert "notion-image:" not in new_str
-    assert "new body" in new_str
+    with pytest.raises(McpError) as exc:
+        await plugin.on_call_tool_request(update_params)
+    assert "notion-image" in str(exc.value)
 
 
 @pytest.mark.asyncio
-async def test_update_content_leaves_old_str_unchanged():
+async def test_update_content_old_placeholder_rejected():
     plugin = _plugin()
     fetch_params = make_call("notion-fetch", {"id": "page1"})
     first_line = f"{BOT} {WRITE_EMOJI}"
@@ -896,9 +913,9 @@ async def test_update_content_leaves_old_str_unchanged():
             "content_updates": [{"old_str": f"body {ph}", "new_str": "new body"}],
         },
     )
-    out = await plugin.on_call_tool_request(update_params)
-    old_str = out.arguments["content_updates"][0]["old_str"]
-    assert "notion-image:" in old_str
+    with pytest.raises(McpError) as exc:
+        await plugin.on_call_tool_request(update_params)
+    assert "notion-image" in str(exc.value)
 
 
 # ---------------------------------------------------------------------------
@@ -926,7 +943,7 @@ async def test_delete_image_blocked_with_read_only():
 
     with pytest.raises(McpError) as exc:
         await plugin._ensure_cached("page1", AccessLevel.WRITE)
-    assert "read-write" in str(exc.value).lower() or "permission" in str(exc.value).lower()
+    assert "write" in str(exc.value).lower() or "permission" in str(exc.value).lower()
 
 
 def test_delete_image_block_id_normalization():

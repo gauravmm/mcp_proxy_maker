@@ -25,8 +25,8 @@ The `notion_access` plugin enforces per-bot, per-page read/write permissions on 
 
 3. **Permission marker protection.** The first line containing the markers is treated as immutable:
    - `update_content` operations that target text matching the first line are blocked.
-   - `replace_content` operations automatically prepend the cached first line, so it can't be accidentally removed.
-   - `notion-create-pages` under a parent with cached permissions automatically inherits the parent's first line into each new child page's content.
+  - `replace_content` operations automatically prepend the cached first line on text-only pages, so it can't be accidentally removed.
+  - `notion-create-pages` always require a top-level `parent.page_id` and automatically inherit the parent's first line into each new child page's content.
 
 ## Configuration
 
@@ -44,7 +44,7 @@ upstreams:
         read_emoji: "👀"               # default: eyes emoji
         write_emoji: "🖊"              # default: pen emoji (no variation selector)
         cache_ttl_seconds: 60          # default: 60; how long cached permissions last
-        allow_workspace_creation: false # default: false; allow creating pages without a parent
+        notion_token: "${NOTION_TOKEN}" # optional; enables notion-upload-image/delete
         block_tools:                   # default: below; tools to hide and block entirely
           - notion-create-database
           - notion-update-data-source
@@ -58,8 +58,8 @@ upstreams:
 | `read_emoji` | `👀` | Emoji that grants read-only access. |
 | `write_emoji` | `🖊` | Emoji that grants read-write access. |
 | `cache_ttl_seconds` | `60` | Seconds before a cached permission expires. After expiry, the page must be fetched again. |
-| `allow_workspace_creation` | `false` | Whether `notion-create-pages` without a `parent.page_id` is allowed. When false, all new pages must be created under an existing parent. |
 | `block_tools` | `["notion-create-database", "notion-update-data-source"]` | Tools to block entirely. These are hidden from tool listings and rejected at call time. |
+| `notion_token` | `null` | Optional Notion integration token used by the synthetic image tools for direct Notion API calls. |
 
 ## Per-tool behavior
 
@@ -74,7 +74,7 @@ upstreams:
 | `notion-create-comment` | WRITE | Page must have been fetched with write access. |
 | `notion-duplicate-page` | WRITE | Page must have been fetched with write access. |
 | `notion-move-pages` | WRITE on all pages | Every page in `page_or_database_ids` must have cached write access. |
-| `notion-create-pages` | WRITE on parent | Parent's first line is inherited into each new child page (any LLM-provided marker line is stripped first). If no parent is specified, controlled by `allow_workspace_creation`. |
+| `notion-create-pages` | WRITE on parent | A top-level `parent.page_id` is required. The parent's first line is inherited into each new child page, and any LLM-provided marker line is stripped first. |
 | `notion-create-database` | Blocked | Blocked by default via `block_tools`. |
 | `notion-update-data-source` | Blocked | Blocked by default via `block_tools`. |
 
@@ -83,8 +83,20 @@ upstreams:
 The permission marker line is protected from modification:
 
 - **`update_content`**: If any `old_str` in `content_updates` matches text found in the cached first line, the operation is blocked. Body edits that don't touch the first line pass through normally.
-- **`replace_content`**: The cached first line is automatically prepended to `new_str`, so the markers survive a full content replacement.
-- **`create-pages` with parent**: When a top-level `parent` with a `page_id` is provided, each new child page's `content` field is prepended with the parent's first line, inheriting the same access markers. If the LLM already included a marker line (any line containing the read or write emoji), it is stripped first to prevent duplication. The proxy is always the authority on the marker — the parent's exact first line is used regardless of what the caller provides.
+- **`replace_content`**: On pages without cached images, the cached first line is automatically prepended to `new_str`, so the markers survive a full content replacement.
+- **`create-pages` with parent**: A top-level `parent.page_id` is mandatory. Each new child page's `content` field is prepended with the parent's first line, inheriting the same access markers. If the LLM already included a marker line (any line containing the read or write emoji), it is stripped first to prevent duplication. The proxy is always the authority on the marker — the parent's exact first line is used regardless of what the caller provides.
+
+## Image behavior
+
+Fetched images are shortened to stable `notion-image:` placeholders so `notion-fetch` output stays compact, while the proxy retains the full signed URLs in its image cache for follow-up image operations.
+
+Text-edit tools are intentionally text-only:
+
+- **`update_content`** rejects any edit that targets or introduces a `notion-image:` placeholder in `old_str` or `new_str`.
+- **`replace_content`** is blocked when the page still has cached images.
+- **Image changes** must go through the dedicated image tools instead of text replacement.
+
+This avoids treating fetched placeholders as a round-trippable text representation of Notion image blocks.
 
 ## Cache behavior
 
