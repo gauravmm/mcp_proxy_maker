@@ -8,6 +8,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import mcp.types as mt
@@ -20,6 +21,7 @@ from ...config.schema import NotionAccessPluginConfig
 from ..base import PluginBase
 from .api import (
     IMAGE_PLACEHOLDER_RE,
+    UPLOAD_PLACEHOLDER_RE,
     extract_page_id_from_fetch_args,
     normalize_page_id,
 )
@@ -111,6 +113,8 @@ class NotionAccessPlugin(PluginBase):
         self._cache: dict[str, CachedPermission] = {}
         self._image_cache: dict[str, dict[str, CachedImage]] = {}
         self._notion_token = config.notion_token
+        configured = [Path(d).resolve() for d in config.allowed_upload_dirs]
+        self._allowed_upload_dirs: list[Path] = configured if configured else [Path.cwd()]
         self._client: Client | None = None
 
     def _get_cached(self, page_id: str) -> CachedPermission | None:
@@ -366,11 +370,123 @@ class NotionAccessPlugin(PluginBase):
         self._image_cache[normalized_page_id] = new_cache
         return ToolResult(content=new_content)
 
+    def _resolve_upload_path(self, file_path: str) -> str:
+        """Resolve and validate an upload file path against the allowed-dirs policy.
+
+        - If ``allowed_upload_dirs`` is empty, any absolute path is accepted as-is.
+        - Relative paths are resolved against each allowed dir in order; the first
+          dir that produces an existing file is used.
+        - Absolute paths must be contained within one of the allowed dirs.
+
+        Returns the resolved absolute path string.
+        Raises McpError if the path is outside every allowed dir, or if a relative
+        path cannot be resolved to an existing file in any allowed dir.
+        """
+        p = Path(file_path)
+
+        if not self._allowed_upload_dirs:
+            # No restriction; resolve relative paths against CWD.
+            return str(p.resolve())
+
+        if p.is_absolute():
+            resolved = p.resolve()
+            for allowed in self._allowed_upload_dirs:
+                try:
+                    resolved.relative_to(allowed)
+                    return str(resolved)
+                except ValueError:
+                    continue
+            allowed_list = ", ".join(str(d) for d in self._allowed_upload_dirs)
+            raise McpError(
+                ErrorData(
+                    code=_ERR_ACCESS_DENIED,
+                    message=(
+                        f"Upload path '{file_path}' is outside the allowed directories: "
+                        f"{allowed_list}"
+                    ),
+                )
+            )
+
+        # Relative path: try each allowed dir.
+        for allowed in self._allowed_upload_dirs:
+            candidate = (allowed / p).resolve()
+            if candidate.exists():
+                # Confirm the resolved path is still inside the allowed dir
+                # (guards against path traversal such as "../../etc/passwd").
+                try:
+                    candidate.relative_to(allowed)
+                    return str(candidate)
+                except ValueError:
+                    continue
+
+        allowed_list = ", ".join(str(d) for d in self._allowed_upload_dirs)
+        raise McpError(
+            ErrorData(
+                code=_ERR_ACCESS_DENIED,
+                message=(
+                    f"Relative upload path '{file_path}' could not be resolved under any "
+                    f"allowed directory: {allowed_list}"
+                ),
+            )
+        )
+
+    async def _auto_upload_placeholders(
+        self,
+        params: mt.CallToolRequestParams,
+        result: ToolResult,
+    ) -> ToolResult:
+        """After a successful notion-update-page, upload any [IMAGE_UPLOAD: /path] placeholders."""
+        if not self._notion_token:
+            return result
+
+        args = params.arguments or {}
+        page_id = normalize_page_id(args.get("page_id", ""))
+        if not page_id:
+            return result
+
+        upload_paths: list[str] = []
+        command = args.get("command", "")
+        if command == "update_content":
+            for update in args.get("content_updates", []):
+                for m in UPLOAD_PLACEHOLDER_RE.finditer(str(update.get("new_str", ""))):
+                    upload_paths.append(m.group(1).strip())
+        elif command == "replace_content":
+            for m in UPLOAD_PLACEHOLDER_RE.finditer(str(args.get("new_str", ""))):
+                upload_paths.append(m.group(1).strip())
+
+        if not upload_paths:
+            return result
+
+        from .image_tools import _do_upload
+
+        upload_results: list[str] = []
+        for file_path in upload_paths:
+            try:
+                resolved = self._resolve_upload_path(file_path)
+                msg = await _do_upload(page_id, resolved, "", self._notion_token)
+                upload_results.append(msg)
+            except McpError as exc:
+                upload_results.append(f"Auto-upload failed for {file_path}: {exc.error.message}")
+            except Exception as exc:
+                upload_results.append(f"Auto-upload error for {file_path}: {exc}")
+
+        extra = "\n".join(upload_results)
+        existing = _extract_text(result)
+        combined = f"{existing}\n{extra}" if existing else extra
+        new_content: list = [mt.TextContent(type="text", text=combined)]
+        for block in result.content or []:
+            if not isinstance(block, mt.TextContent):
+                new_content.append(block)
+        return ToolResult(content=new_content)
+
     async def on_call_tool_response(
         self,
         params: mt.CallToolRequestParams,
         result: ToolResult,
     ) -> ToolResult:
+        if params.name == "notion-update-page":
+            return await self._auto_upload_placeholders(params, result)
+
         if params.name != "notion-fetch":
             return result
 

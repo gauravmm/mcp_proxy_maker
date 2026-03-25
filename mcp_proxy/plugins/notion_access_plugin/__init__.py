@@ -5,6 +5,7 @@ from .api import (
     IMAGE_PLACEHOLDER_RE,
     NOTION_VERSION,
     PLACEHOLDER_PREFIX,
+    UPLOAD_PLACEHOLDER_RE,
     extract_page_id_from_fetch_args,
     normalize_page_id,
 )
@@ -24,6 +25,7 @@ __all__ = [
     "IMAGE_PLACEHOLDER_RE",
     "NOTION_VERSION",
     "PLACEHOLDER_PREFIX",
+    "UPLOAD_PLACEHOLDER_RE",
     "_ERR_ACCESS_DENIED",
     "_NOTION_S3_IMAGE_RE",
     "AccessLevel",

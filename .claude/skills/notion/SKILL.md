@@ -96,9 +96,7 @@ notion-update-page
 
 ### Uploading images
 
-The Notion MCP server has no native file-upload capability. Use the two-step placeholder workflow:
-
-**Step 1** — Insert a placeholder using `notion-update-page` (permission is checked automatically):
+The Notion MCP server has no native file-upload capability. Include an `[IMAGE_UPLOAD: /path]` marker anywhere in `new_str` — the proxy auto-uploads the file after the page update and replaces the marker with an image block:
 
 ```
 notion-update-page
@@ -110,7 +108,9 @@ notion-update-page
   }]
 ```
 
-**Step 2** — Upload the image (finds the placeholder, uploads the file, replaces it with an image block):
+The proxy handles everything in one call: creates a Notion file upload session, sends the bytes, deletes the placeholder text, and inserts the image block at the same position. The response includes a confirmation line for each uploaded file.
+
+**Caption:** to add a caption, call `notion-upload-image` explicitly after inserting the placeholder (the proxy does not yet pass captions through automatic upload):
 
 ```
 notion-upload-image
@@ -119,9 +119,7 @@ notion-upload-image
   caption: "Optional caption"
 ```
 
-The tool handles everything: creates a Notion file upload session, sends the bytes, deletes the placeholder, and appends the image block at the same position.
-
-**Important:** the placeholder text must exactly match `[IMAGE_UPLOAD: /path/to/file]` (same path as `file_path`). If the placeholder is missing, the upload fails with an error — re-insert it and retry.
+**If auto-upload fails:** the placeholder text remains in the page. Fix the reported error (e.g. wrong path) and call `notion-upload-image` manually to retry.
 
 ### Notion-flavored Markdown primer
 

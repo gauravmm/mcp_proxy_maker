@@ -9,6 +9,7 @@ NOTION_VERSION = "2022-06-28"
 PLACEHOLDER_PREFIX = "IMAGE_UPLOAD:"
 
 IMAGE_PLACEHOLDER_RE = re.compile(r"!\[[^\]]*\]\(notion-image:[^)]+\)\n?")
+UPLOAD_PLACEHOLDER_RE = re.compile(r"\[IMAGE_UPLOAD:\s*([^\]]+)\]")
 
 
 def normalize_page_id(page_id: str) -> str:

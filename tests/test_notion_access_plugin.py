@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
+
 import mcp.types as mt
 import pytest
 from fastmcp.tools.tool import ToolResult
@@ -973,3 +976,241 @@ async def test_create_pages_requires_write():
     )
     with pytest.raises(McpError):
         await plugin.on_call_tool_request(create_params)
+
+
+# ---------------------------------------------------------------------------
+# Auto-upload: _auto_upload_placeholders
+# ---------------------------------------------------------------------------
+
+
+def _plugin_with_token(**overrides) -> NotionAccessPlugin:
+    return _plugin(notion_token="fake-token", **overrides)
+
+
+def _make_update_content_call(page_id: str, old_str: str, new_str: str) -> mt.CallToolRequestParams:
+    return make_call(
+        "notion-update-page",
+        {
+            "page_id": page_id,
+            "command": "update_content",
+            "content_updates": [{"old_str": old_str, "new_str": new_str}],
+        },
+    )
+
+
+def _make_replace_content_call(page_id: str, new_str: str) -> mt.CallToolRequestParams:
+    return make_call(
+        "notion-update-page",
+        {"page_id": page_id, "command": "replace_content", "new_str": new_str},
+    )
+
+
+@pytest.mark.asyncio
+async def test_auto_upload_skipped_when_no_token():
+    """Auto-upload is skipped silently when notion_token is not configured."""
+    plugin = _plugin()  # no token
+    params = _make_update_content_call("page1", "old", "new\n[IMAGE_UPLOAD: /tmp/x.png]")
+    result = make_result("Page updated.")
+
+    with patch(
+        "mcp_proxy.plugins.notion_access_plugin.image_tools._do_upload", new_callable=AsyncMock
+    ) as mock_upload:
+        out = await plugin._auto_upload_placeholders(params, result)
+
+    mock_upload.assert_not_called()
+    assert out is result
+
+
+@pytest.mark.asyncio
+async def test_auto_upload_skipped_for_non_update_command():
+    """update_properties command (no new_str) produces no uploads."""
+    plugin = _plugin_with_token()
+    params = make_call(
+        "notion-update-page",
+        {"page_id": "page1", "command": "update_properties", "properties": {"title": "X"}},
+    )
+    result = make_result("Page updated.")
+
+    with patch(
+        "mcp_proxy.plugins.notion_access_plugin.image_tools._do_upload", new_callable=AsyncMock
+    ) as mock_upload:
+        out = await plugin._auto_upload_placeholders(params, result)
+
+    mock_upload.assert_not_called()
+    assert out is result
+
+
+@pytest.mark.asyncio
+async def test_auto_upload_skipped_when_no_placeholder():
+    """No placeholder in new_str → result is returned unchanged."""
+    plugin = _plugin_with_token()
+    params = _make_update_content_call("page1", "old", "new text without upload marker")
+    result = make_result("Page updated.")
+
+    with patch(
+        "mcp_proxy.plugins.notion_access_plugin.image_tools._do_upload", new_callable=AsyncMock
+    ) as mock_upload:
+        out = await plugin._auto_upload_placeholders(params, result)
+
+    mock_upload.assert_not_called()
+    assert out is result
+
+
+@pytest.mark.asyncio
+async def test_auto_upload_triggered_for_update_content(tmp_path):
+    """Placeholder in update_content new_str triggers _do_upload."""
+    img = tmp_path / "photo.png"
+    img.write_bytes(b"\x89PNG")
+
+    plugin = _plugin_with_token(allowed_upload_dirs=[str(tmp_path)])
+    params = _make_update_content_call("page1", "old", f"new\n[IMAGE_UPLOAD: {img}]")
+    result = make_result("Page updated.")
+
+    with patch(
+        "mcp_proxy.plugins.notion_access_plugin.image_tools._do_upload",
+        new_callable=AsyncMock,
+        return_value=f"Image '{img.name}' uploaded.",
+    ) as mock_upload:
+        out = await plugin._auto_upload_placeholders(params, result)
+
+    mock_upload.assert_called_once_with(normalize_page_id("page1"), str(img), "", "fake-token")
+    assert f"Image '{img.name}' uploaded." in _extract_text(out)
+
+
+@pytest.mark.asyncio
+async def test_auto_upload_triggered_for_replace_content(tmp_path):
+    """Placeholder in replace_content new_str triggers _do_upload."""
+    img = tmp_path / "chart.png"
+    img.write_bytes(b"\x89PNG")
+
+    plugin = _plugin_with_token(allowed_upload_dirs=[str(tmp_path)])
+    params = _make_replace_content_call("page1", f"body\n[IMAGE_UPLOAD: {img}]")
+    result = make_result("Page updated.")
+
+    with patch(
+        "mcp_proxy.plugins.notion_access_plugin.image_tools._do_upload",
+        new_callable=AsyncMock,
+        return_value="chart.png uploaded.",
+    ) as mock_upload:
+        out = await plugin._auto_upload_placeholders(params, result)
+
+    mock_upload.assert_called_once()
+    assert "chart.png uploaded." in _extract_text(out)
+
+
+@pytest.mark.asyncio
+async def test_auto_upload_multiple_placeholders(tmp_path):
+    """Multiple placeholders in the same new_str all trigger uploads."""
+    img1 = tmp_path / "a.png"
+    img2 = tmp_path / "b.png"
+    img1.write_bytes(b"\x89PNG")
+    img2.write_bytes(b"\x89PNG")
+
+    plugin = _plugin_with_token(allowed_upload_dirs=[str(tmp_path)])
+    params = _make_update_content_call(
+        "page1", "old", f"line1\n[IMAGE_UPLOAD: {img1}]\nline2\n[IMAGE_UPLOAD: {img2}]"
+    )
+    result = make_result("Page updated.")
+
+    with patch(
+        "mcp_proxy.plugins.notion_access_plugin.image_tools._do_upload",
+        new_callable=AsyncMock,
+        side_effect=["a.png uploaded.", "b.png uploaded."],
+    ) as mock_upload:
+        out = await plugin._auto_upload_placeholders(params, result)
+
+    assert mock_upload.call_count == 2
+    text = _extract_text(out)
+    assert "a.png uploaded." in text
+    assert "b.png uploaded." in text
+
+
+@pytest.mark.asyncio
+async def test_auto_upload_error_appended_to_response(tmp_path):
+    """When _do_upload raises, the error is appended to the response (not re-raised)."""
+    plugin = _plugin_with_token()
+    img = tmp_path / "missing.png"
+    # Intentionally do NOT create the file so _do_upload raises "File not found"
+
+    params = _make_update_content_call("page1", "old", f"new\n[IMAGE_UPLOAD: {img}]")
+    result = make_result("Page updated.")
+
+    # _do_upload itself raises because the file doesn't exist
+    out = await plugin._auto_upload_placeholders(params, result)
+
+    text = _extract_text(out)
+    assert "Page updated." in text
+    assert "Auto-upload failed" in text or "Auto-upload error" in text
+
+
+# ---------------------------------------------------------------------------
+# Path security: _resolve_upload_path
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_path_defaults_to_cwd(tmp_path):
+    """With no allowed_upload_dirs configured, the default is CWD (not unrestricted)."""
+    plugin = _plugin_with_token()
+    # Files outside CWD are blocked by default.
+    img = tmp_path / "photo.png"
+    img.write_bytes(b"")
+    with pytest.raises(McpError) as exc:
+        plugin._resolve_upload_path(str(img))
+    assert "outside" in str(exc.value).lower()
+
+
+def test_resolve_absolute_path_allowed(tmp_path):
+    plugin = _plugin_with_token(allowed_upload_dirs=[str(tmp_path)])
+    img = tmp_path / "photo.png"
+    img.write_bytes(b"")
+    resolved = plugin._resolve_upload_path(str(img))
+    assert resolved == str(img.resolve())
+
+
+def test_resolve_absolute_path_outside_allowed(tmp_path):
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    plugin = _plugin_with_token(allowed_upload_dirs=[str(allowed)])
+    outside = tmp_path / "secret.txt"
+    outside.write_bytes(b"secret")
+    with pytest.raises(McpError) as exc:
+        plugin._resolve_upload_path(str(outside))
+    assert "outside" in str(exc.value).lower()
+
+
+def test_resolve_relative_path_found_in_allowed_dir(tmp_path):
+    plugin = _plugin_with_token(allowed_upload_dirs=[str(tmp_path)])
+    img = tmp_path / "photo.png"
+    img.write_bytes(b"")
+    resolved = plugin._resolve_upload_path("photo.png")
+    assert resolved == str(img.resolve())
+
+
+def test_resolve_relative_path_not_found(tmp_path):
+    plugin = _plugin_with_token(allowed_upload_dirs=[str(tmp_path)])
+    with pytest.raises(McpError) as exc:
+        plugin._resolve_upload_path("nonexistent.png")
+    assert "could not be resolved" in str(exc.value).lower()
+
+
+def test_resolve_relative_path_traversal_blocked(tmp_path):
+    """Path traversal (../../etc/passwd) must not escape the allowed dir."""
+    allowed = tmp_path / "uploads"
+    allowed.mkdir()
+    outside = tmp_path / "secret.txt"
+    outside.write_bytes(b"secret")
+    plugin = _plugin_with_token(allowed_upload_dirs=[str(allowed)])
+    with pytest.raises(McpError):
+        plugin._resolve_upload_path("../secret.txt")
+
+
+def test_resolve_multiple_allowed_dirs_uses_first_match(tmp_path):
+    dir_a = tmp_path / "a"
+    dir_b = tmp_path / "b"
+    dir_a.mkdir()
+    dir_b.mkdir()
+    img_b = dir_b / "photo.png"
+    img_b.write_bytes(b"")
+    plugin = _plugin_with_token(allowed_upload_dirs=[str(dir_a), str(dir_b)])
+    resolved = plugin._resolve_upload_path("photo.png")
+    assert resolved == str(img_b.resolve())

@@ -110,6 +110,10 @@ class NotionAccessPluginConfig(BaseModel):
     cache_ttl_seconds: int = 60
     block_tools: list[str] = ["notion-create-database", "notion-update-data-source"]
     notion_token: str | None = None
+    # Directories the agent is allowed to upload files from. Defaults to the
+    # working directory at startup when empty. Relative paths in IMAGE_UPLOAD
+    # markers are resolved against each entry in order; the first match is used.
+    allowed_upload_dirs: list[str] = []
 
 
 class HiveAccessPluginConfig(BaseModel):
