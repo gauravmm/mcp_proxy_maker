@@ -155,18 +155,18 @@ The proxy currently supports setting deadlines and scheduled dates **only at cre
 When helping plan work across multiple actions:
 
 - Use `getActions` with `startDate`/`endDate` to find actions in a date window.
-- Summarise in a table: title, project, status, deadline, assignee.
+- Summarise in a list: title, project, status, deadline, assignee.
 - Flag any `isBlocked: true` actions — they cannot proceed until their dependency is resolved.
 
 ### 8. Output Format
 
 Unless the user asks for a specific format, respond with:
 
-- **For searches**: a concise table (title, status, deadline, assignee, project). Omit empty columns.
+- **For searches**: a concise list (title, status, deadline, assignee, project). Omit empty columns.
 - **For creates**: confirm what was created (title, project, deadline if set). Include IDs only if the user explicitly asks or a later step requires one.
 - **For updates**: confirm what changed (old value → new value where applicable).
 - **For errors**: explain what was blocked and why, offer an alternative.
 
-Do not dump raw JSON at the user. Extract and present only the fields relevant to their request.
+Do not dump raw JSON at the user. Extract and present only the fields relevant to their request. Hide raw IDs from the user. Show only when required for disambiguation or explicit user request.
 
-Default to hiding raw IDs from the user. Surface them only when unavoidable for disambiguation, explicit user request, or a handoff that genuinely requires a machine-readable identifier.
+If the user wants a link, `https://app.hive.com/workspace/{{ workspaceId }}?projectId={{ projectId }}&actionId={{ actionId }}` is the format for linking to a specific action. You can construct this URL if you have the relevant IDs internally, but only share it if the user asks for a link or if it is necessary to complete the task.
