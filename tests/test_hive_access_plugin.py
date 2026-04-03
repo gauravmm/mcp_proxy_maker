@@ -356,6 +356,47 @@ async def test_write_tool_empty_action_ids_raises():
 
 
 # ---------------------------------------------------------------------------
+# updateActionsTitles (nested actionTitleUpdates format)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_update_actions_titles_cached_allowed_passes():
+    p = _plugin()
+    p._action_project_cache["action1"] = PROJECT_A
+    result = await p.on_call_tool_request(
+        _call(
+            "updateActionsTitles",
+            {
+                "workspaceId": "other",
+                "actionTitleUpdates": [{"actionId": "action1", "title": "New Title"}],
+            },
+        )
+    )
+    assert result.arguments["workspaceId"] == WS_ID
+
+
+@pytest.mark.asyncio
+async def test_update_actions_titles_cached_disallowed_raises():
+    p = _plugin()
+    p._action_project_cache["action1"] = PROJECT_X
+    with pytest.raises(McpError, match="not in the allowed"):
+        await p.on_call_tool_request(
+            _call(
+                "updateActionsTitles",
+                {"actionTitleUpdates": [{"actionId": "action1", "title": "Title"}]},
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_update_actions_titles_empty_raises():
+    p = _plugin()
+    with pytest.raises(McpError, match="non-empty"):
+        await p.on_call_tool_request(_call("updateActionsTitles", {"actionTitleUpdates": []}))
+
+
+# ---------------------------------------------------------------------------
 # Passthrough tools
 # ---------------------------------------------------------------------------
 

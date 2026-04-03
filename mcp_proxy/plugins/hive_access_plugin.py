@@ -154,7 +154,13 @@ class HiveAccessPlugin(PluginBase):
             args = self._enforce_insert_actions(args)
 
         elif name in _WRITE_BY_ACTION_IDS:
-            action_ids = args.get("actionIds") or []
+            if name == "updateActionsTitles":
+                updates = args.get("actionTitleUpdates") or []
+                action_ids = [
+                    u["actionId"] for u in updates if isinstance(u, dict) and u.get("actionId")
+                ]
+            else:
+                action_ids = args.get("actionIds") or []
             if not action_ids:
                 raise McpError(ErrorData(code=_ERR_DENIED, message="actionIds must be non-empty."))
             await self._verify_action_ids(action_ids)
